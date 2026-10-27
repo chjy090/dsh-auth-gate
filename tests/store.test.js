@@ -9,6 +9,8 @@ import { generateSecret } from '../lib/totp.js';
 import { randomToken, safeEqualString, sha256Hex, StateStore } from '../lib/store.js';
 
 const ROOT = path.join(process.cwd(), '.test-tmp', 'store-tests');
+const T0 = 1_800_000_000_000;
+const DAY = 86_400_000;
 let counter = 0;
 
 async function tempDir() {
@@ -255,5 +257,63 @@ test('public state never exposes hashes or token material', async () => {
   assert.equal(state.devices.length, 1);
   const serialized = JSON.stringify(state);
   assert.doesNotMatch(serialized, /tokenHash|passwordHash|totpSecretB32/u);
+  await store.close();
+});
+
+test('v0.7.1 P2-2: device reads and extendDevice never expose tokenHash', async () => {
+  const dir = await tempDir();
+  const { store } = await openStore(dir);
+  await createUser(store);
+  const { ticket } = await store.issueTicket({ ttlMs: 60_000 });
+  const redeemed = await store.redeemTicket(ticket, {
+    maxDevices: 8,
+    deviceTtlMs: 90 * DAY,
+    deviceAbsoluteTtlMs: 365 * DAY,
+    name: 'phone',
+    platform: 'android',
+    origin: 'https://g'
+  });
+  assert.equal(redeemed.status, 'ok');
+
+  const byToken = await store.findDeviceByToken(redeemed.token);
+  assert.equal(byToken.tokenHash, undefined, 'findDeviceByToken must not return tokenHash');
+  const byId = await store.findDeviceById(redeemed.device.id);
+  assert.equal(byId.tokenHash, undefined, 'findDeviceById must not return tokenHash');
+
+  const extended = await store.extendDevice(redeemed.device.id, { idleMs: 90 * DAY, absoluteMs: 365 * DAY });
+  assert.ok(extended);
+  assert.equal(extended.device.tokenHash, undefined, 'extendDevice must not return tokenHash');
+  assert.doesNotMatch(JSON.stringify(extended), /tokenHash/u);
+  await store.close();
+});
+
+test('v0.7.1 P2-3: active device absolute ceiling is enforced on read paths and cascades to sessions', async () => {
+  const clock = { value: T0 };
+  const dir = await tempDir();
+  const { store } = await openStore(dir, { now: () => clock.value });
+  await createUser(store);
+  const { ticket } = await store.issueTicket({ ttlMs: 60_000 });
+  // Persisted by an "older version": no absolute ceiling at pairing and a
+  // 400-day idle deadline, so expiresAt is still in the future when the
+  // currently configured 365-day cap is reached.
+  const redeemed = await store.redeemTicket(ticket, {
+    maxDevices: 8,
+    deviceTtlMs: 400 * DAY,
+    deviceAbsoluteTtlMs: 0,
+    name: 'legacy',
+    platform: 'android',
+    origin: 'https://g'
+  });
+  assert.equal(redeemed.device.expiresAt, T0 + 400 * DAY);
+  const session = await store.createSession({
+    deviceId: redeemed.device.id,
+    ttlMs: 400 * DAY,
+    absoluteTtlMs: 400 * DAY
+  });
+  clock.value = T0 + 366 * DAY;
+  assert.equal(await store.findDeviceByToken(redeemed.token, { absoluteMs: 365 * DAY }), null, 'over-age device token must not resolve');
+  assert.equal(await store.findDeviceById(redeemed.device.id), null, 'read path deleted the over-age device');
+  assert.equal(await store.findSession(session.token), null, 'its sessions are removed with it');
+  assert.equal(store.devices.length, 0);
   await store.close();
 });

@@ -27,8 +27,10 @@
         tlsKey: /path/to/dsh.key.pem
         adminKeyFile: $DSH_HOME/auth-gate/admin.key
         stateDir: $DSH_HOME/auth-gate
-        sessionTtlHours: 8
+        sessionAbsoluteTtlDays: 30
+        sessionTtlHours: 48
         deviceTtlDays: 90
+        deviceAbsoluteTtlDays: 365
         maxDevices: 8
         pairTicketTtlSeconds: 120
         loginLock:

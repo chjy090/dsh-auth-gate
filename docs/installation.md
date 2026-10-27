@@ -2,7 +2,7 @@
 
 本文是 `dsh-auth-gate` 的**可照做安装手册**，覆盖：前置要求、安装进 dsh、配置项、两种首次初始化方式、设备配对与登录、frp/Caddy 网络拓扑、日常运维、故障排查、安全模型和安装后自检。
 
-- 适用版本：`dsh-auth-gate` **v0.6.2**（`package.json`）。
+- 适用版本：`dsh-auth-gate` **v0.7.1**（`package.json`）；v0.7.1 为 v0.7.0 的 P2 安全修复，配置与 `state.json` 格式不变。
 - 验证基线：dsh **0.2.1-rc.2**、Node.js **v22.23.2**、pnpm **12.15.0**、npm **10.9.8**（2026-10 的实际部署）。
 - 读者：拥有 dsh 服务器 root 权限、准备把认证网关放到公网入口的管理员。
 - 协议：单用户自用。**设备配对就是第二因素**：配对时需要 TOTP，配对成功后该设备登录只需用户名 + 密码。
@@ -242,8 +242,10 @@ $DSH_HOME/profiles/web/cordis.patch.yml
     tlsKey: /opt/deepseekharness/config/tls/dsh.key.pem
     adminKeyFile: $DSH_HOME/auth-gate/admin.key
     stateDir: $DSH_HOME/auth-gate
-    sessionTtlHours: 8
-    deviceTtlDays: 90
+    sessionTtlHours: 48            # 空闲窗口（小时）
+    sessionAbsoluteTtlDays: 30     # 绝对上限（天，自会话创建起算；0 = 无上限）
+    deviceTtlDays: 90              # 设备滑动窗口（天）
+    deviceAbsoluteTtlDays: 365     # 设备绝对上限（天，自配对起算；0 = 无上限）
     maxDevices: 8
     pairTicketTtlSeconds: 120
     loginLock:
@@ -511,8 +513,10 @@ jq '{dep:.dependencies["dsh-auth-gate"],
 | `tlsCert` / `tlsKey` | 路径，默认 `null` | 必须同时配置或同时留空；必须是 PEM；进程可读 | 网关自己的 HTTPS 证书/私钥。只配一个会启动失败；读取失败/非 PEM 会 `failed to start`。改证书需重启 dsh。 |
 | `adminKeyFile` | 路径，默认 `<stateDir>/admin.key` | 支持 `~`、`$HOME`、`$DSH_HOME` 展开；文件内容必须是 64 位小写 hex（32 字节） | 管理密钥文件。首次启动自动生成（0600）；已存在但内容非法时**拒绝启动**。不要把它放进 Web 根目录。 |
 | `stateDir` | 路径，默认 `$DSH_HOME/auth-gate`（无 `DSH_HOME` 时 `~/.dsh/auth-gate`） | 持久化目录；只允许一个网关进程使用 | 保存 `state.json`、`admin.key`、`setup.token`、`network.json`。目录 0700；备份/迁移见 7.3。 |
-| `sessionTtlHours` | 整数，默认 `8` | 1–720（30 天） | 登录会话有效期。改小更安全；改大方便但增加 cookie 泄露窗口。 |
-| `deviceTtlDays` | 整数，默认 `90` | 1–3650 | 已配对设备有效期；过期后需重新配对。设备 cookie `Max-Age` 同此值。 |
+| `sessionTtlHours` | 整数，默认 `48` | 1–720（30 天） | 会话**空闲窗口**（小时）。每个已认证 HTTP 请求在“距上次刷新 ≥ min(1h, 窗口/2)”或“剩余有效期 < 窗口/2”时滑动续期并重发 cookie。改小更安全；改大方便但增加 cookie 泄露窗口。 |
+| `sessionAbsoluteTtlDays` | 整数，默认 `30` | 0–3650；0 = 无绝对上限 | 会话**绝对上限**（天，自 `createdAt` 起算）。即使持续活跃，到点后会话也立即失效。 |
+| `deviceTtlDays` | 整数，默认 `90` | 1–3650 | 已配对设备的**滑动窗口**；每次 `renew` 成功或密码登录成功推进到 `min(now + 窗口, 配对时间 + 绝对上限)`，设备 cookie 按新的剩余时长重发。 |
+| `deviceAbsoluteTtlDays` | 整数，默认 `365` | 0–3650；0 = 无绝对上限 | 设备**绝对上限**（天，自配对创建起算）；到点后设备记录被 prune（同时删除其全部 session），必须重新配对。 |
 | `maxDevices` | 整数，默认 `8` | 1–100 | 活跃设备上限；达到上限时配对返回 `device_limit`，先吊销旧设备。 |
 | `pairTicketTtlSeconds` | 整数，默认 `120` | 1–3600 | 一次性配对票据有效期；二维码过期需重新生成。 |
 | `loginLock.maxFailures` | 整数，默认 `5` | 1–100 | 同一 IP + 用户名在窗口内允许的失败次数。 |
@@ -554,8 +558,10 @@ jq '{dep:.dependencies["dsh-auth-gate"],
     stateDir: $DSH_HOME/auth-gate
 
     # --- 生命周期与限流 ---
-    sessionTtlHours: 8
-    deviceTtlDays: 90
+    sessionTtlHours: 48            # 空闲窗口（小时）
+    sessionAbsoluteTtlDays: 30     # 绝对上限（天，自会话创建起算；0 = 无上限）
+    deviceTtlDays: 90              # 设备滑动窗口（天）
+    deviceAbsoluteTtlDays: 365     # 设备绝对上限（天，自配对起算；0 = 无上限）
     maxDevices: 8
     pairTicketTtlSeconds: 120
     loginLock:
@@ -810,7 +816,7 @@ token 位于 URL **fragment**（`#setup=`），不会发给服务器，也不会
 
 #### 4.1.4 登录
 
-在登录页输入用户名和密码；成功后得到 `dsh_gate_session`（默认 8 小时），打开 `/__admin` 管理页即可。
+在登录页输入用户名和密码；成功后得到 `dsh_gate_session`（v0.7.0 起：空闲窗口默认 48 小时、绝对上限 30 天，活跃请求会滑动续期；v0.7.1 起所有带 cookie 的响应为 `cache-control: private, no-store` + `vary: cookie`），打开 `/__admin` 管理页即可。
 
 #### 4.1.5 令牌生命周期
 
@@ -1030,11 +1036,13 @@ curl -sk -X POST "$GATE_URL/__admin/api/qr" \
 ### 5.4 登录、会话、续期、登出
 
 - 未登录访问页面：HTML 请求 302 到 `/__auth/login?next=...`；非 HTML/API 请求 401 JSON `authentication_required`。
-- 登录：`POST /__auth/login`，JSON `{username,password}`，需要 CSRF 头/cookie；成功 200 + `dsh_gate_session`（默认 8 小时）。
+- 登录：`POST /__auth/login`，JSON `{username,password}`，需要 CSRF 头/cookie；成功 200 + `dsh_gate_session`（空闲窗口默认 48 小时、绝对上限 30 天）并返回 `expiresAt`/`deviceExpiresAt`。登录成功也会滑动设备有效期并重发 `dsh_gate_device`。
 - 无设备 cookie：401 `device_required`；设备 origin 与当前 `publicUrl` 不一致：401 `origin_changed`；用户名/密码错：401 `invalid_credentials`；连续失败触发 429。
 - `GET /__auth/whoami`：无会话返回 200 `{"authenticated":false}`；有会话返回用户/设备/过期时间。
 - `POST /__auth/logout`：删除当前会话，设备保留。
-- `POST /__auth/renew`：只接受 JSON body 的 `deviceToken`，不接受 cookie 回退；成功换新会话。
+- `POST /__auth/renew`：只接受 JSON body 的 `deviceToken`，不接受 cookie 回退；成功换新会话，同时滑动设备有效期、重发设备 cookie，并在响应中返回 `deviceExpiresAt`（毫秒时间戳）。
+- 会话滑动：每个**已认证的 HTTP 请求**（反代、管理页/API、whoami；不含 WebSocket upgrade，WS 只更新 `lastSeenAt`）在到期前按配置刷新 `expiresAt` 并重发 `dsh_gate_session`（同一 token，新的 `Max-Age`）。刷新只在需要时发生（每次请求最多一次落盘），SSE/流式响应与静态资源不会造成写放大。
+- 绝对上限：`now > expiresAt`（空闲）或 `now > createdAt + sessionAbsoluteTtlDays`（绝对）都视为无效；旧版本创建的会话在下一次刷新时补写 `absoluteExpiresAt`。
 - 设备 cookie：`dsh_gate_device`；会话 cookie：`dsh_gate_session`；CSRF cookie：`dsh_gate_csrf`；都 `HttpOnly`、`SameSite=Lax`，TLS 下 `Secure`。
 - 网关不把 dsh 的 `dsh-auth-*` cookie 暴露给浏览器：上游注入、响应剥离。
 
@@ -1408,7 +1416,7 @@ sudo journalctl -u dsh -b --no-pager | grep auth-gate
 | 轮换 adminKey | 停 dsh → `openssl rand -hex 32 > "${STATE_DIR:?}/admin.key"` → `chmod 600` → 启动 | 旧 key 立即失效；不影响用户/设备/TOTP/会话 |
 | 改密码 | 管理页/`POST /__admin/api/user` | 撤销全部设备 + 会话；所有设备重新配对 |
 | 重置 TOTP | 管理页/`POST /__admin/api/user {"resetTotp":true}` | 同上；新 secret/QR 只显示一次 |
-| 吊销单台设备 | 管理页/`POST /__admin/api/devices/revoke` | 该设备会话与续期立即失效；不影响其他设备 |
+| 吊销单台设备 | 管理页/`POST /__admin/api/devices/revoke` | **级联**：设备记录、该设备全部 session、全部待用配对票据一次原子删除；旧 deviceToken 的 renew、所有 session cookie 与设备 cookie 下一次请求立即失效（401/403）；不影响其他设备 |
 
 adminKey 文件丢失但有 root：停止 dsh，写入新的 64 位 hex 到 `admin.key`（0600），启动；不需要清空 `state.json`。如果连 `state.json` 也丢失，只能重新初始化（全部设备/账号丢失）。
 
@@ -1507,7 +1515,7 @@ curl -sk -o /dev/null -w 'root_html=%{http_code} %{redirect_url}\n' -H 'Accept: 
 ### 9.3 `deviceToken` / 设备 cookie 等同账号凭据
 
 - `POST /__auth/renew` **只接受 JSON body 的 `deviceToken`，不需要密码**，可直接换出新 session；
-- 因此 `deviceToken`/`dsh_gate_device` 泄露 = 最长 90 天的持久访问（可反复 renew）；密码已知时还可直接登录；
+- 因此 `deviceToken`/`dsh_gate_device` 泄露 = 设备有效期内的持久访问（滑动 90 天、绝对上限 365 天，可反复 renew）；密码已知时还可直接登录；
 - 泄露处置：立即在管理页吊销该设备；怀疑密码同时泄露时改密（会撤销全部设备/会话）；不要发到聊天/日志/工单；
 - 网关不校验设备指纹；清 cookie、换浏览器、换设备都视为新设备，需重新配对。
 
@@ -1626,7 +1634,7 @@ sudo firewall-cmd --list-all | sed -n '1,40p'
 ```bash
 cd "$PLUGIN_DIR"
 
-# 单测（v0.6.2 基线 138/138）
+# 单测（v0.7.1 基线 151/151）
 npm test
 
 # 独立网关 E2E（1~2 分钟；会启动临时 dsh/网关，使用独立 DSH_HOME/stateDir）
@@ -1644,7 +1652,7 @@ E2E 说明：
 
 已实测（2026-10，生产实例只读检查）：
 
-- `npm test` → **138/138 pass**；
+- `npm test` → **151/151 pass**（v0.7.1）；`bash tests/e2e-standalone.sh` → **E2E PASSED（27 步 / 37 PASS）**（本轮已实际运行：第 26 步注入时钟的滑动/绝对上限 + v0.7.1 P2-1/P2-3 场景；第 27 步真实网关的 cookie 缓存头与 public asset 不重发 cookie）；
 - `GET /__auth/whoami` → `{"authenticated":false}`；
 - `GET /__admin/api/setup/status` → `{"configured":true,"hasToken":false,...}`；
 - `GET /`（默认 Accept）→ 401；`Accept: text/html` → 302；
@@ -1662,13 +1670,15 @@ E2E 说明：
 - 首次初始化向导 / `bootstrap` / `/__admin/api/qr`（生产已初始化，执行会改变账号/审计）；
 - frp/Caddy 拓扑与证书续期（本机没有可复现的公网 VPS/Caddy 链路）；
 - 真实浏览器中的配对、侧边栏面板、黑屏修复与移动端扫码（需真机/浏览器人工验收）；
-- `bash tests/e2e-standalone.sh`（未运行；会启动临时实例）。
+- 生产实例上的 v0.7.0/v0.7.1 行为（滑动刷新/双 cookie/吊销级联、P2-1 响应头、P2-3 读路径绝对上限）未验证：本轮未重启生产 dsh；`renew`/登录的成功路径、旧会话迁移与旧设备清理需重启后按 §10.1 抽查。
 
 ### 10.5 版本要点
 
 - v0.4.0：TOTP 从登录移到配对；登录只看已配对设备 + 用户名密码；
 - v0.5.0：WebUI 首次初始化向导（setup.token，一次链接；自动配对当前浏览器）；
 - v0.6.0：管理页网络设置；`publicUrl` 影响二维码；监听热重建；设备 origin 变化返回 `origin_changed`；
+- v0.7.1：P2 安全修复（无新功能）——带会话/设备 cookie 的响应统一 `private, no-store` + `Vary: cookie`，public asset 不刷新会话/不重发 cookie；`extendDevice`/设备读取不再返回 `tokenHash`；设备绝对上限在**所有读路径**生效，越限设备及其全部 session 立即删除（旧 state / 调低 `deviceAbsoluteTtlDays` 无需等到下一次 renew/登录）；单测 147→151、e2e 26→27 步；
+- v0.7.0：设备/会话改为「滑动窗口 + 绝对上限」（48h/30d 会话、90d/365d 设备，均可在配置里关掉绝对上限）；`renew`/登录重发设备 cookie 并返回 `deviceExpiresAt`；会话刷新重发 `dsh_gate_session`；吊销设备级联删除其全部 session 与待用 ticket，过期 prune 同时删 session；
 - v0.6.1：安全修复（P0）：拒绝 loopback 监听、loopback 管理通道在监听 loopback 时禁用、热重建先绑新后关旧、`network.json` 损坏回退；
 - v0.6.2：`publicFingerprint`（外部/代理证书指纹），frp + Caddy TLS 终止场景；`auto` 自动读取；证书续期需重读。
 

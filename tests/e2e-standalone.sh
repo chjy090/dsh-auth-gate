@@ -430,7 +430,7 @@ assert_file_contains "$TMP/login-page.html" '配对后的设备登录只需用�
 grep -qi '^x-content-type-options: nosniff' "$TMP/login-page-headers" || fail "missing nosniff"
 grep -qi '^strict-transport-security:' "$TMP/login-page-headers" || fail "missing HSTS"
 grep -qi '^content-security-policy:.*nonce-' "$TMP/login-page-headers" || fail "missing CSP nonce"
-grep -qi '^cache-control: no-store' "$TMP/login-page-headers" || fail "login page must not be cached"
+grep -qiE '^cache-control: (private, )?no-store' "$TMP/login-page-headers" || fail "login page must not be cached"
 pass "login page is username+password only with CSRF nonce, nosniff, HSTS, no-store"
 
 # ---------------------------------------------------------------------------
@@ -514,11 +514,26 @@ COOKIE_RENEW_CODE=$(curl -sk --max-time 20 -o "$TMP/renew-cookie.json" -w '%{htt
 assert_eq "$COOKIE_RENEW_CODE" 401 "renew must not fall back to the device cookie"
 assert_eq "$(json_get "$TMP/renew-cookie.json" error)" "device_required" "cookie renew error"
 E2E_DEVICE_TOKEN="$DEVICE_TOKEN" node tests/e2e-helpers.mjs renew-json "$TMP/renew-payload.json"
-RENEW_CODE=$(curl -sk --max-time 20 -o "$TMP/renew.json" -w '%{http_code}' -c "$JAR_RENEW" -b "$JAR_RENEW" \
+RENEW_CODE=$(curl -sk --max-time 20 -D "$TMP/renew-headers" -o "$TMP/renew.json" -w '%{http_code}' -c "$JAR_RENEW" -b "$JAR_RENEW" \
   -X POST "$BASE/__auth/renew" -H 'content-type: application/json' --data-binary @"$TMP/renew-payload.json")
 assert_eq "$RENEW_CODE" 200 "renew"
 [ -n "$(node tests/e2e-helpers.mjs cookie "$JAR_RENEW" dsh_gate_session)" ] || fail "renew did not set a session cookie"
-pass "body token renews; empty body and cookie fallback are refused"
+# v0.7.0: a successful renewal re-issues the device cookie (sliding lifetime)
+# as well as the session cookie; the session Max-Age is the full 48h window.
+[ -n "$(node tests/e2e-helpers.mjs cookie "$JAR_RENEW" dsh_gate_device)" ] || fail "renew did not re-issue the device cookie"
+grep -qi 'set-cookie:.*dsh_gate_device=.*Max-Age=' "$TMP/renew-headers" || fail "device cookie has no Max-Age on renew"
+grep -qi 'set-cookie:.*dsh_gate_session=.*Max-Age=172800' "$TMP/renew-headers" || fail "session cookie Max-Age is not the 48h idle window"
+RENEW_DEVICE_EXP_1=$(json_get "$TMP/renew.json" deviceExpiresAt)
+[ -n "$RENEW_DEVICE_EXP_1" ] || fail "renew response has no deviceExpiresAt"
+# A second renewal a second later must push the sliding device deadline forward.
+sleep 1.1
+RENEW_CODE_2=$(curl -sk --max-time 20 -o "$TMP/renew-2.json" -w '%{http_code}' -c "$JAR_RENEW" -b "$JAR_RENEW" \
+  -X POST "$BASE/__auth/renew" -H 'content-type: application/json' --data-binary @"$TMP/renew-payload.json")
+assert_eq "$RENEW_CODE_2" 200 "second renew"
+RENEW_DEVICE_EXP_2=$(json_get "$TMP/renew-2.json" deviceExpiresAt)
+[ -n "$RENEW_DEVICE_EXP_2" ] || fail "second renew response has no deviceExpiresAt"
+[ "$RENEW_DEVICE_EXP_2" -gt "$RENEW_DEVICE_EXP_1" ] || fail "device expiry did not slide forward: [$RENEW_DEVICE_EXP_1] -> [$RENEW_DEVICE_EXP_2]"
+pass "body token renews; device expiry slides forward and both cookies are re-issued; empty body and cookie fallback are refused"
 
 # ---------------------------------------------------------------------------
 step "9. reverse proxy serves the real dsh GUI"
@@ -572,7 +587,7 @@ assert_file_contains "$TMP/admin-page.html" "$DEVICE_ID" "paired device id in ad
 assert_file_contains "$TMP/admin-page.html" '所有设备需重新扫码' "re-pair warning"
 assert_file_contains "$TMP/admin-page.html" '登录会话' "session channel label"
 grep -qi '^content-security-policy:.*nonce-' "$TMP/admin-page-headers" || fail "admin page lost its CSP nonce"
-grep -qi '^cache-control: no-store' "$TMP/admin-page-headers" || fail "admin page must not be cached"
+grep -qiE '^cache-control: (private, )?no-store' "$TMP/admin-page-headers" || fail "admin page must not be cached"
 secret_not_in_file "$PASSWORD" "$TMP/admin-page.html" || fail "password found in admin page"
 secret_not_in_file "$TOTP_SECRET" "$TMP/admin-page.html" || fail "TOTP secret found in admin page"
 secret_not_in_file "$DEVICE_TOKEN" "$TMP/admin-page.html" || fail "device token found in admin page"
@@ -694,11 +709,30 @@ assert_eq "$(json_get "$TMP/redeem-expired.json" error)" "expired_ticket" "expir
 pass "expired_ticket after ${PAIR_TTL}s TTL"
 
 # ---------------------------------------------------------------------------
-step "16. device revocation"
+step "16. device revocation (token + all sessions + pending tickets)"
+# Keep a session and a pending pairing ticket from *before* the revoke: the
+# cascade must invalidate both immediately, not merely the device token.
+REVOKE_SESSION_COOKIE=$(node tests/e2e-helpers.mjs cookie "$JAR_RENEW" dsh_gate_session)
+[ -n "$REVOKE_SESSION_COOKIE" ] || fail "no session cookie available for the revoke cascade"
+STALE_QR_CODE=$(request_qr "$TMP/qr-stale-before-revoke.json")
+assert_eq "$STALE_QR_CODE" 200 "QR before revoke"
+STALE_TICKET=$(node tests/e2e-helpers.mjs ticket "$TMP/qr-stale-before-revoke.json")
+[ -n "$STALE_TICKET" ] || fail "no ticket before revoke"
 REVOKE_CODE=$(curl -sk --max-time 10 -o "$TMP/revoke.json" -w '%{http_code}' -X POST "$BASE/__admin/api/devices/revoke" \
   -H "x-auth-gate-admin-key: $ADMIN_KEY" -H 'content-type: application/json' -d "{\"deviceId\":\"$DEVICE_ID\"}")
 assert_eq "$REVOKE_CODE" 200 "device revoke"
 assert_eq "$(json_get "$TMP/revoke.json" ok)" "true" "revoke response"
+assert_eq "$(json_get "$TMP/revoke.json" sessionsRevoked)" "2" "revoke reports the cascaded session count (login + two renews, one logged out)"
+SESSION_AFTER_REVOKE=$(curl -sk --max-time 10 -o "$TMP/session-after-revoke.json" -w '%{http_code}' \
+  -H "cookie: dsh_gate_session=$REVOKE_SESSION_COOKIE" "$BASE/__admin/api/state")
+assert_eq "$SESSION_AFTER_REVOKE" 403 "revoked device's session cookie after cascade"
+WHOAMI_AFTER_REVOKE=$(curl -sk --max-time 10 -o "$TMP/whoami-after-revoke.json" -w '%{http_code}' \
+  -H "cookie: dsh_gate_session=$REVOKE_SESSION_COOKIE" "$BASE/__auth/whoami")
+assert_eq "$WHOAMI_AFTER_REVOKE" 200 "whoami after cascade"
+assert_eq "$(json_get "$TMP/whoami-after-revoke.json" authenticated)" "false" "revoked session is unauthenticated"
+STALE_REDEEM=$(redeem_ticket "$STALE_TICKET" "$JAR_DEVICE" "$TMP/redeem-stale-after-revoke.json")
+assert_eq "$STALE_REDEEM" 401 "ticket minted before revoke"
+assert_eq "$(json_get "$TMP/redeem-stale-after-revoke.json" error)" "invalid_ticket" "stale ticket after revoke"
 E2E_DEVICE_TOKEN="$DEVICE_TOKEN" node tests/e2e-helpers.mjs renew-json "$TMP/renew-revoked-payload.json"
 REVOKED_RENEW_CODE=$(curl -sk --max-time 20 -o "$TMP/renew-revoked.json" -w '%{http_code}' \
   -X POST "$BASE/__auth/renew" -H 'content-type: application/json' --data-binary @"$TMP/renew-revoked-payload.json")
@@ -706,7 +740,7 @@ assert_eq "$REVOKED_RENEW_CODE" 401 "renew after device revoke"
 assert_eq "$(json_get "$TMP/renew-revoked.json" error)" "device_required" "revoked device error"
 curl -sk --max-time 10 -H "x-auth-gate-admin-key: $ADMIN_KEY" -o "$TMP/admin-state-revoked.json" "$BASE/__admin/api/state"
 assert_eq "$(json_get "$TMP/admin-state-revoked.json" devices.length)" "0" "devices after revoke"
-pass "device revoked and its sessions/ renewal invalidated"
+pass "device revoked: its renewal, every session cookie and the pre-revoke ticket are invalidated immediately"
 
 # ---------------------------------------------------------------------------
 step "17. audit log, secret hygiene and state permissions"
@@ -907,7 +941,7 @@ assert_file_contains "$TMP/setup-page.html" 'id="setup-form"' "setup wizard step
 assert_file_contains "$TMP/setup-page.html" 'id="setup-confirm-form"' "setup wizard step 2 form"
 assert_file_contains "$TMP/setup-page.html" 'id="setup-totp"' "setup wizard TOTP input"
 grep -qi '^x-frame-options: DENY' "$TMP/setup-page-headers" || fail "setup wizard must not be framable"
-grep -qi '^cache-control: no-store' "$TMP/setup-page-headers" || fail "setup wizard must not be cached"
+grep -qiE '^cache-control: (private, )?no-store' "$TMP/setup-page-headers" || fail "setup wizard must not be cached"
 grep -qi '^content-security-policy:.*nonce-' "$TMP/setup-page-headers" || fail "setup wizard lost its CSP nonce"
 secret_not_in_file "$SETUP_TOKEN_ORIG" "$TMP/setup-page.html" || fail "setup page echoed the token"
 
@@ -1418,6 +1452,44 @@ secret_not_in_file "$SETUP_SECRET" "$TMP/network-audit-fp.json" || fail "TOTP se
 pass "fixed/normalized and auto-detected publicFingerprint drive the QR fp; empty falls back to the gateway certificate; failed probes are 400 with no persistence; session writes still need TOTP"
 
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+step "26. sliding session / device lifetimes with an injectable clock"
+# The main gateway runs on the real clock, so the 1h refresh interval and the
+# 30-day absolute ceiling cannot be observed in a few seconds. This in-process
+# harness drives the *same* gateway code over real HTTP with an injected clock
+# (10 scenarios: device renew cap, login slide, renew cookies, session slide +
+# cookie Max-Age, absolute ceiling, idle expiry, revoke cascade, prune cascade,
+# v0.7.1 P2-1 cookie-cache/asset no-refresh, v0.7.1 P2-3 over-age device reads).
+if ! node --test tests/sliding.test.js > "$TMP/sliding.log" 2>&1; then
+  tail -n 80 "$TMP/sliding.log" >&2
+  fail "sliding lifetime scenario failed"
+fi
+grep -q '^# fail 0$' "$TMP/sliding.log" || fail "sliding lifetime scenario reported failures"
+grep -q '^ok .*P2-1: cookie responses' "$TMP/sliding.log" || fail "P2-1 cookie/asset scenario did not run"
+grep -q '^ok .*P2-3: over-age devices' "$TMP/sliding.log" || fail "P2-3 absolute read-path scenario did not run"
+pass "device/session sliding, absolute ceilings and revoke/prune cascade pass over real HTTP"
+
+# ---------------------------------------------------------------------------
+step "27. v0.7.1 P2-1: cookie responses private/no-store + Vary: cookie, assets set none"
+# Every response that attaches a gateway cookie (CSRF, login, renew, session
+# refresh) must be uncacheable by a shared cache. login-new-headers and
+# renew-headers were captured earlier from real Set-Cookie responses.
+grep -qi '^cache-control: private, no-store' "$TMP/login-page-headers" || fail "CSRF-bearing login page is not private/no-store"
+grep -qi '^vary: cookie' "$TMP/login-page-headers" || fail "CSRF-bearing login page is missing Vary: cookie"
+grep -qi '^cache-control: private, no-store' "$TMP/login-new-headers" || fail "login response is not private/no-store"
+grep -qi '^vary: cookie' "$TMP/login-new-headers" || fail "login response is missing Vary: cookie"
+grep -qi '^cache-control: private, no-store' "$TMP/renew-headers" || fail "renew response is not private/no-store"
+grep -qi '^vary: cookie' "$TMP/renew-headers" || fail "renew response is missing Vary: cookie"
+# A public dist asset fetched with a valid session cookie must not require
+# auth, must not re-issue cookies and must therefore stay cacheable as-is.
+ASSET_CODE=$(curl -sk --max-time 20 -D "$TMP/asset-headers" -o "$TMP/asset-body" -w '%{http_code}' \
+  -b "$JAR_NEW" -H 'Accept: */*' "$BASE/assets/v0.7.1-cookie-cache-probe.js")
+case "$ASSET_CODE" in
+  401|302) fail "public asset with a session cookie must stay public (got $ASSET_CODE)" ;;
+esac
+! grep -qi '^set-cookie:' "$TMP/asset-headers" || fail "public asset response must not set cookies"
+pass "cookie responses carry private/no-store + Vary: cookie; assets stay cookie-less and public"
 
 # ---------------------------------------------------------------------------
 step "result"

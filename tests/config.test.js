@@ -30,9 +30,40 @@ test('plain-HTTP defaults resolve and publicUrl is derived', async () => {
   assert.equal(resolved.upstreamBaseUrl, 'http://127.0.0.1:3999/');
   assert.equal(resolved.tls, null);
   assert.equal(resolved.fingerprint, '');
-  assert.equal(resolved.sessionTtlHours, 8);
+  // v0.7.0 defaults: 48h sliding idle window, 30d absolute, 90d device + 365d device ceiling.
+  assert.equal(resolved.sessionTtlHours, 48);
+  assert.equal(resolved.sessionAbsoluteTtlDays, 30);
+  assert.equal(resolved.deviceTtlDays, 90);
+  assert.equal(resolved.deviceAbsoluteTtlDays, 365);
+  assert.equal(gatewayConfig(resolved).sessionAbsoluteTtlDays, 30);
+  assert.equal(gatewayConfig(resolved).deviceAbsoluteTtlDays, 365);
   assert.deepEqual(resolved.loginLock, { maxFailures: 5, windowMinutes: 15, lockMinutes: 15 });
   assert.equal(gatewayConfig(resolved).listenPort, 3456);
+});
+
+test('absolute TTL ceilings accept 0 (= no ceiling) and enforce 0-3650', async () => {
+  const dir = await tempDir();
+  const base = { listenHost: '127.0.0.1', listenPort: 3456, upstream: 'http://127.0.0.1:3999', stateDir: dir };
+  const unlimited = await resolveConfig(
+    { ...base, sessionAbsoluteTtlDays: 0, deviceAbsoluteTtlDays: 0 },
+    { env: TEST_ENV }
+  );
+  assert.equal(unlimited.sessionAbsoluteTtlDays, 0);
+  assert.equal(unlimited.deviceAbsoluteTtlDays, 0);
+  assert.equal(unlimited.sessionTtlHours, 48);
+  assert.equal(unlimited.deviceTtlDays, 90);
+
+  for (const [key, value] of [
+    ['sessionAbsoluteTtlDays', -1],
+    ['sessionAbsoluteTtlDays', 3651],
+    ['deviceAbsoluteTtlDays', -1],
+    ['deviceAbsoluteTtlDays', 3651]
+  ]) {
+    await assert.rejects(resolveConfig({ ...base, [key]: value }, { env: TEST_ENV }), new RegExp(key, 'u'));
+  }
+  // Sliding windows still require at least one day/hour.
+  await assert.rejects(resolveConfig({ ...base, deviceTtlDays: 0 }, { env: TEST_ENV }), /deviceTtlDays/u);
+  await assert.rejects(resolveConfig({ ...base, sessionTtlHours: 0 }, { env: TEST_ENV }), /sessionTtlHours/u);
 });
 
 test('string values from environment-style config are coerced', async () => {

@@ -507,7 +507,7 @@ test('session channel can revoke another device and its token/session die', asyn
       body: { deviceId: second.device.id }
     });
     assert.equal(revoke.status, 200);
-    assert.deepEqual(JSON.parse(revoke.body), { ok: true, revoked: true });
+    assert.deepEqual(JSON.parse(revoke.body), { ok: true, revoked: true, sessionsRevoked: 1, ticketsRevoked: 0 });
 
     // The revoked device's session no longer authorizes admin access.
     const revokedSession = await httpRequest(h.port, {
