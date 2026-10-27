@@ -70,6 +70,8 @@ dsh-auth-gate/
 └── README.md
 ```
 
+> 详细的安装与配置步骤见 [docs/installation.md](docs/installation.md)（前置要求、配置项、WebUI/adminKey 初始化、frp/Caddy、排障与安全模型）。
+
 ## 安装（需要用户自行执行；本轮未安装、未重启 dsh）
 
 前提：dsh 已经用 `--tls-cert/--tls-key` 原生 HTTPS 运行，证书路径与默认配置一致。
@@ -89,35 +91,20 @@ dsh-auth-gate/
    dsh plugin --profile web add link:$PLUGIN_DIR
    ```
 
-3. 在 `$DSH_HOME/profiles/web/cordis.patch.yml` 中追加（或合并）插件配置：
+3. **配置覆盖（可选）**：`dsh plugin add` 已通过插件的 bundle patch 自动注入 `auth-gate`（默认配置见 `cordis.patch.yml`），**不要**再追加同 id 的 `- insert:`（会产生重复条目）。需要改监听地址/端口/上游/TLS 时，在 `$DSH_HOME/profiles/web/cordis.patch.yml` 里用 **id-targeted 覆盖**（不加 `insert:`）：
 
    ```yaml
-   - insert:
-       - id: auth-gate
-         name: 'dsh-auth-gate'
-         config:
-           listenHost: 192.0.2.10
-           listenPort: 3443
-           upstream: https://192.0.2.10:3080
-           upstreamInsecureTls: true
-           publicUrl: https://192.0.2.10:3443
-           # 可选：TLS 由 frp 后的反代终止时填公网证书 SHA-256（64 位 hex）；留空用网关自身证书
-           # publicFingerprint: 70a78d74d75fc65a17685b11408b5337cb3f5c32f91346e8705043251a45aaac
-           tlsCert: /path/to/dsh.crt.pem
-           tlsKey: /path/to/dsh.key.pem
-           adminKeyFile: $DSH_HOME/auth-gate/admin.key
-           stateDir: $DSH_HOME/auth-gate
-           sessionTtlHours: 8
-           deviceTtlDays: 90
-           maxDevices: 8
-           pairTicketTtlSeconds: 120
-           loginLock:
-             maxFailures: 5
-             windowMinutes: 15
-             lockMinutes: 15
+   - id: auth-gate
+     name: 'dsh-auth-gate'
+     config:
+       listenHost: 192.0.2.10
+       listenPort: 3443
+       # …只写需要覆盖的字段，其余沿用 bundle 默认…
    ```
 
-   也可以直接使用包内的 `cordis.patch.yml` 作为默认值；插件已通过 `dsh.bundle.patch` 声明它。
+
+
+   > 插件包内的 `cordis.patch.yml` 由 `dsh.bundle.patch` 自动提供默认值；上面只需写覆盖字段即可。完整配置项说明见 [docs/installation.md](docs/installation.md)。
 
 4. 重启 dsh 让插件生效：
 
