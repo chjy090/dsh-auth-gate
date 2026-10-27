@@ -1,0 +1,35 @@
+# dsh-auth-gate — 前台 HTTPS 认证网关（扫码设备验证 + 用户名密码 + TOTP）。
+#
+# 本文件由插件包通过 dsh.profile.bundles / dsh.bundle.patch 提供给 profile。
+# 安装：
+#   dsh plugin --profile web add link:$PLUGIN_DIR
+# 或在 profile 的 cordis.patch.yml（$DSH_HOME/profiles/web/cordis.patch.yml）里
+# 直接追加下面这段 insert；随后重启 dsh。
+#
+# 安全提示：
+#   - listenHost 必须是具体网卡地址，不支持 0.0.0.0/::；只暴露给需要访问的网段。
+#   - upstream 当前为 dsh 原生 HTTPS（自签证书），因此 upstreamInsecureTls 为 true；
+#     若 dsh 改回明文 HTTP，请同步修改 upstream / publicUrl / tls*。
+#   - 首次启动会在 $DSH_HOME/auth-gate/admin.key 生成 32 字节 hex 管理密钥（0600），
+#     并在日志打印一次；请立即保存到密码管理器。
+- insert:
+    - id: auth-gate
+      name: 'dsh-auth-gate'
+      config:
+        listenHost: 192.0.2.10
+        listenPort: 3443
+        upstream: https://192.0.2.10:3080
+        upstreamInsecureTls: true
+        publicUrl: https://192.0.2.10:3443
+        tlsCert: /path/to/dsh.crt.pem
+        tlsKey: /path/to/dsh.key.pem
+        adminKeyFile: $DSH_HOME/auth-gate/admin.key
+        stateDir: $DSH_HOME/auth-gate
+        sessionTtlHours: 8
+        deviceTtlDays: 90
+        maxDevices: 8
+        pairTicketTtlSeconds: 120
+        loginLock:
+          maxFailures: 5
+          windowMinutes: 15
+          lockMinutes: 15
