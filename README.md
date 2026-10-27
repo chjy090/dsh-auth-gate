@@ -594,6 +594,14 @@ node lib/standalone.js
 
 `SIGINT`/`SIGTERM` 会优雅关闭（关闭监听、销毁 socket、落盘状态）。
 
+## 版本与更新
+
+- **所有版本变更与发行说明统一发布在 GitHub Releases**：<https://github.com/chjy090/dsh-auth-gate/releases>。
+- **升级（link 安装）**：更新源码（`git pull` 或替换插件目录）→ `systemctl restart dsh`，无需重新 `dsh plugin add`。账号、TOTP、已配对设备、`state.json` 与 `network.json` 都会保留，无需迁移。
+- **升级前建议备份**：`tar -czf ~/auth-gate-$(date +%F).tgz -C "$DSH_HOME" auth-gate`（含账号与设备，权限 0600）。
+- **回滚方式**：把源码切到目标 Release 对应的 tag/commit（或解压旧版本备份）→ `systemctl restart dsh`。旧版本会忽略新版本写入的多余 state 字段；仍建议回滚前备份 `$DSH_HOME/auth-gate`。
+- **查看当前版本**：`node -e "console.log(require('./package.json').version)"`。
+
 ## 测试
 
 ```bash
@@ -603,24 +611,6 @@ bash tests/e2e-standalone.sh   # 真实 TLS 网关全流程（1~2 分钟，含 W
 ```
 
 当前基线（v0.7.1）：`npm test` **151/151 pass**；`bash tests/e2e-standalone.sh` → **E2E PASSED（27 步 / 37 PASS）**。第 21 步在 LAN 地址 + 独立 `stateDir` 的已初始化实例上验证 session+TOTP 改 publicUrl、QR 使用中转 origin、invalid 400、adminKey 恢复；第 22 步验证 LAN 地址上 3458→3459→3458 热重建（先绑新后关旧、旧端口关闭/新端口 200/network.json 持久化）；第 23 步验证通配地址（含 `::0`/`0::0`/`00::`/`::ffff:0.0.0.0`）、loopback（`127.0.0.1`/`::1`）、上游端口、http/https 不匹配均 400 且不持久化/不改监听，并验证「绑定成功但 network.json 持久化失败」时关闭新监听、旧端口继续 200；第 24 步验证损坏 `network.json` 启动回退到 bundle config；v0.7.1 新增/改动：第 3/11/19 步的 `no-store` 断言兼容 `private, no-store`；第 26 步新增注入时钟的 P2-1（cookie 响应头 + asset 不刷新）与 P2-3（旧设备越过绝对上限后 token/session 失效）场景；第 27 步对真实网关断言登录页/登录/renew 响应带 `private, no-store` + `Vary: cookie`，带会话 cookie 的 public asset 不返回 `Set-Cookie` 且不被要求登录。第 25 步验证 `publicFingerprint`：空值回退网关证书、固定值（大写归一）驱动 QR `fp=`、`"auto"` 对 setup 实例自身 TLS 握手读出证书指纹并落盘、探测失败（关闭端口）400 `fingerprint_fetch_failed` 且不落盘、session 写入仍须 TOTP、审计只留前 8 位。主网关仍监听 loopback，用于验证 P0 修复（无凭据读 state/admin-key 均 403，启动 WARN）。
-
-v0.7.1（P2 安全修复，无新功能）：① **P2-1 会话 cookie 缓存隔离**：`#handleProxy` 对 `isPublicAssetRequest` 命中的 GET/HEAD 不再解析/刷新会话（asset 响应不附带 `Set-Cookie`）；server handler 安装 `writeHead` 钩子 `hardenCookieResponse`，凡是本次响应附加了 `Set-Cookie`（登录/配对/CSRF/renew/会话刷新/登出，以及“上游响应头 + 网关刷新 cookie”的反代响应）都强制 `cache-control: private, no-store` + `vary: cookie`，已有 Cache-Control 会去掉冲突的 `public` 并保留其余指令，已有 Vary 追加 `cookie`。② **P2-2 tokenHash 不外泄**：`extendDevice` 返回 `{...device, tokenHash: undefined}`；`findDeviceByToken`/`findDeviceById` 同样不再返回 `tokenHash`（`JSON.stringify` 中完全消失）。③ **P2-3 绝对上限覆盖读路径**：`findDeviceByToken(token,{absoluteMs})`/`findDeviceById(id,{absoluteMs})` 增加 `createdAt + absoluteMs <= now` 判定，命中即调用 `#dropDevice` 删除设备**及其全部 session**并返回 `null`；`#deviceLookupFromToken`（renew/登录/设备 cookie）与 `#sessionFromRequest`（反代/管理/whoami/WS）都传入当前 `deviceAbsoluteTtlMs`。因此旧 `state.json` 中 `expiresAt` 未到期的设备、或调低 `deviceAbsoluteTtlDays` 后已越过绝对上限的设备，在下一次任何请求即失效（renew 401、会话未认证/管理 403），不再需要等到下次 renew/登录物化。④ 单测 147→151（`tests/store.test.js` +2：tokenHash 不回传、读路径绝对上限级联；`tests/sliding.test.js` +2：cookie 缓存头/asset 不刷新、旧设备 token/session 读路径拒绝），e2e 26→27 步（新增第 27 步，第 26 步兼容 `private, no-store` 并断言两个新场景）；README/installation/design §4.0/§8.13 同步；`package.json`/`package-lock.json` → 0.7.1。**未重启生产 dsh**。
-
-v0.7.0（滑动续期 + 绝对上限 + 吊销级联）：① `lib/store.js` 新增 `slidingExpiry`/`extendDevice`/`refreshSession`；设备在 `renew`/密码登录成功时 `expiresAt = min(now+deviceTtlDays, createdAt+deviceAbsoluteTtlDays)` 并单次持久化，会话记录新增 `lastRefreshedAt`/`absoluteExpiresAt`，已认证 HTTP 请求满足 `≥min(1h, 窗口/2)` 或剩余不足半窗口时刷新并单次落盘；`findSession` 同时校验空闲与绝对截止，旧 `state.json` 可直接加载（下次刷新补齐绝对上限）。② 配置新增 `sessionAbsoluteTtlDays`（默认 30）与 `deviceAbsoluteTtlDays`（默认 365，均 0–3650、0=无上限），`sessionTtlHours` 默认 8→48；`cordis.patch.yml` 写入 48/30/90/365；standalone 新增对应 `AUTH_GATE_*_ABSOLUTE_TTL_DAYS`。③ `POST /__auth/renew` 与密码登录响应增加 `deviceExpiresAt`，并重发 `dsh_gate_device`（新的剩余 `Max-Age`）；会话刷新重发 `dsh_gate_session`（同 token）；`pair/redeem` 与 setup 初始化按 `min(now+idle, now+absolute)` 下发设备 cookie。④ 吊销级联：`revokeDevice` 在同一个原子写中删除设备记录、该设备**全部** session 与全部待用 ticket；设备过期 prune/`findDeviceByToken` 同时删除其全部 session；`POST /__admin/api/devices/revoke` 返回 `{sessionsRevoked,ticketsRevoked}` 并写审计。⑤ WebSocket upgrade 只更新 `lastSeenAt`，不刷新、不写盘；SSE/流式/静态/反代请求受 1h 节流，单请求最多一次落盘（store 串行锁内二次确认）。⑥ 单测 138→147（新增 `tests/sliding.test.js` 8 项 + config 绝对上限校验），e2e 25→26 步（第 8 步双 renew 滑动、第 16 步会话/ticket 级联、第 26 步注入时钟 HTTP 场景）；README/installation/design §4.0/§8.12 同步。**未重启生产 dsh**。
-
-v0.6.2（对外证书指纹）：① `network.json`/bundle config 新增可选 `publicFingerprint`（空或 64 位 hex；`auto` 仅 POST），`validatePublicFingerprint` 归一大小写并返回 400 `invalid_public_fingerprint`；② 新增 `lib/fingerprint.js`：`node:tls` 只连当前/提交的 `publicUrl` host:port（默认 443，5s 超时、`rejectUnauthorized:false`、不发 HTTP），取 leaf DER 算 SHA-256；失败 400 `fingerprint_fetch_failed` 且不落盘，目标不可由调用方指定；③ 二维码 `fp=` 改为 `publicFingerprint || 网关证书指纹`，`GET/POST /__admin/api/network` 返回 `publicFingerprint`/`effectiveFingerprint`/`fingerprintHint`，审计记 `public_fp=<前8位|self>`；④ 服务端 `/__admin` 与原生「设置」tab 新增输入框 +「从对外地址自动读取」+ 实际生效值展示 + 错误映射；⑤ 单测 132→138（新增 `tests/fingerprint.test.js`），e2e 24→25 步；⑥ README 增加 frp + Caddy TLS 终止反代场景与续期/SSRF 说明。**未重启生产 dsh**。
-
-v0.6.1（安全修复，无新增功能）：① `lib/network.js` 归一化 IPv6/映射地址后拒绝 loopback（`listen_host_loopback_not_allowed`）与全部通配写法；② `lib/gateway.js` 在 `server.address()` 后二次拒绝通配；实际绑定 loopback 时禁用 loopback 自动管理通道（仅 adminKey/会话）并 WARN，PoC 的 `/__admin/api/admin-key` 不再泄露；③ 热重建改为先绑定新监听、成功持久化后再关闭旧监听，持久化失败关闭新监听且旧监听不受影响；④ `network.json` 损坏时打印 `rm -f` 恢复指引并回退 bundle config 继续启动；⑤ 双 UI/README 删除 loopback 建议，新增错误文案；⑥ 单测 127→132，e2e 23→24 步。实测 `git diff --check`、`node --check`、`bash -n` 通过；**未重启生产 dsh**。
-
-v0.6.0（网络设置 / frp）：① 新增 `lib/network.js`（严格 host/port/纯 origin 校验、0600 原子写）；`resolveConfig` 读取 `$DSH_HOME/auth-gate/network.json` 覆盖 bundle config（优先级 override > bundle > 默认），文件缺失/损坏行为明确；② gateway 新增 `GET/POST /__admin/api/network`（session 通道必须 TOTP，独立限流 scope `admin:net`；adminKey/loopback 免 TOTP），`GET /state` 附带 `network`；监听热重建采用“旧监听停止接受 → 绑定新地址 → 持久化 → 成功后异步断开旧连接”，绑定/持久化失败回滚旧地址并返回 400 `rebind_failed`；③ `publicUrl` 即时影响新的配对 QR/链接；设备 origin 不再匹配时登录/续期返回 `origin_changed`（明确要求重新配对，已有会话不受影响）；④ 服务端 `/__admin` 与原生侧边栏「设置」tab 均提供 TLS/来源展示、三个字段、TOTP、二次确认、错误映射与重建提示；原生面板改为同源 `setup/status` 探测，不再硬编码 3443 才能使用；⑤ 新增 12 项单测 + e2e 第 21~23 步。
-
-v0.5.0（WebUI 首次初始化向导，登录/配对/反代/CSRF 语义不变）：① 未初始化时 `StateStore` 生成/复用 `$stateDir/setup.token`（32B hex、0600），gateway 启动日志打印唯一一条完整初始化链接；② `/__admin` 未初始化时改为服务端渲染三步向导（建号 → TOTP → 自动配对当前浏览器），初始化完成后恢复原 302/鉴权；③ 新增公开 `setup/status|begin|confirm` 与受信通道 `setup/token`：begin 只写内存 pending（不落盘/不建用户），confirm 原子创建用户+确认 TOTP+创建 web 设备+下发 90 天 device cookie+删除 token；④ 所有 setup 写接口在初始化后 409，begin/confirm 每 IP 10 次/5 分钟限流、Origin 同源校验、审计不含秘密；⑤ client 面板先查公开 status，未初始化只显示「网关尚未初始化」卡片（不发 CSRF/whoami/state，不显示登录 CTA）。单测 104 → 115；e2e 18 → 20 步。
-
-v0.4.3（网关静态资源放行，无鉴权/API 语义变更）：浏览器取 `<link rel="manifest">`/favicon 时不带会话 cookie，旧版网关把 dsh 的静态 dist 资源也按需登录处理，Console 出现 `GET https://<host>:3443/manifest.webmanifest 401 (Unauthorized)`。现在 `#handleProxy` 对 **GET/HEAD** 的 `/manifest.webmanifest`、`/favicon.svg`、`/favicon-dark.svg`、`/favicon.ico`、`/apple-touch-icon.png`、`/apple-touch-icon-precomposed.png` 与 `/assets/` 前缀放行（只跳过网关会话检查，仍反代到 dsh 并受 dsh 自身 fence 约束；`/api/*`、`/plugins/*`、`/__auth/*`、`/__admin*` 与所有非 GET/HEAD 请求保持原鉴权）。新增放行/拒绝单测与 mock 上游集成测试。
-
-v0.4.2（client 健壮性，服务端/API/CSRF/轮询未改）：① 修复 3443 已登录面板空白的真实根因——`AuthGatePage` 构造 header 时引用了未定义的 `totpBound`（应为 `totpConfigured`），`ReferenceError` 在真实 React 中会卸载整棵树；3080 在 `PortNotice` 提前 return 所以正常；② 新增 `PanelErrorBoundary` 可见错误卡 + `[auth-gate]` Console 日志；③ primitives 导出缺失/抛错时用本地 DOM fallback，`writeClipboard` 缺失走 `navigator.clipboard`；④ `?authgate-debug=1` / `#authgate-debug` 调试卡；⑤ 新增 8 条渲染回归测试（ready/unconfigured/off-gateway/缺 primitives/调试卡/错误边界/导出/注册），单测 94 → 102。
-
-v0.4.0 把 TOTP 从登录移到配对：单测更新为新登录断言（已配对 + 密码、未配对 `device_required`、QR 缺/错 TOTP 403、同窗口连续出码、TOTP 失败 5 次 429）；client bundle 在隔离 `DSH_HOME` 的临时 dsh（127.0.0.1:3097 + 明文网关 127.0.0.1:3457）上重新验证 boot manifest 含 client 条目、单文件 bundle（200 / 74 850 B）与 `node --check`，并用 Node VM + fake React 渲染 harness 断言「配对 tab 是 6 位动态验证码、无当前密码；未登录/端口降级逻辑正常」。生产 dsh 未重启。
 
 E2E 行为：
 
