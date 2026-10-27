@@ -23,6 +23,12 @@ v0.5.0 起，全新部署的首次初始化可以完全在浏览器完成：网�
 
 > 网关是 dsh 前面的**第二道门**，不是 dsh 自身的替代鉴权。dsh 目前监听 `192.0.2.10:3080`，能直连该地址的人仍可看到 dsh 自己的登录入口；生产环境建议用防火墙把 3080 限制为 loopback/可信网段。
 
+## 相关仓库
+
+- **本仓库（`dsh-auth-gate`）**：部署在 dsh 服务端的认证网关插件，独立发布插件源码与文档。
+- **[DSH-Mobile](https://github.com/chjy090/DSH-Mobile)**：Android 客户端，用系统 WebView 加载 dsh Web GUI；
+  v0.4.0 起支持扫码配对、证书指纹 pin 与设备令牌续期/登出，与本网关配套使用。
+
 ## 功能
 
 - 前台 HTTPS 监听（默认 `192.0.2.10:3443`），TLS 1.2+，HSTS。
@@ -78,7 +84,7 @@ export PLUGIN_DIR="$HOME/dsh-auth-gate"
 
 前提：dsh 已经用 `--tls-cert/--tls-key` 原生 HTTPS 运行，证书路径与默认配置一致。
 
-> 说明：下文的 `$PLUGIN_DIR` 表示本仓库根目录（若在 monorepo 中则为 `<仓库根>/dsh-auth-gate`）。
+> 说明：下文的 `$PLUGIN_DIR` 表示本仓库根目录（即克隆后的 `dsh-auth-gate` 目录）。
 
 1. 在插件目录安装依赖（`qrcode`）：
 
@@ -333,7 +339,7 @@ adminKey 是 bearer 凭据：不要写进 URL、日志或 shell 历史；轮换�
 1. 管理页点「生成配对二维码」（或 `POST /__admin/api/qr`；**会话通道需在 body 带 `totp`（6 位动态验证码）**，adminKey/loopback 免）。返回的 `url` 形如
    `https://192.0.2.10:3443/__auth/pair#v=1&t=<ticket>&fp=<证书DER SHA256>&n=<主机名>`。
    票据只存在 fragment，服务端日志不会出现；TOTP/当前密码都不会进入 URL，也不会写入审计。
-2. 手机 App（DSH Mobile v0.4.0）扫码后比对 `fp` 与证书 SHA-256，然后 `POST /__auth/pair/redeem`
+2. 手机 App（[DSH Mobile](https://github.com/chjy090/DSH-Mobile) v0.4.0）扫码后比对 `fp` 与证书 SHA-256，然后 `POST /__auth/pair/redeem`
    换取 `deviceToken`，同时拿到 `HttpOnly; Secure; SameSite=Lax` 的设备 cookie（90 天）。
 3. 打开网关地址：没有会话时 302 到 `/__auth/login?next=…`；输入**用户名 + 密码**（已配对设备无需 TOTP）。
    没有设备 cookie 时登录固定返回 `device_required`（先扫码配对）。
@@ -455,9 +461,11 @@ node lib/standalone.js
 
 ## 开发与测试
 
-本发布仓库只包含运行时源码，不包含测试代码（`tests/` 与 e2e 脚本仅在 DSH-Mobile monorepo 的
-`dsh-auth-gate/tests/` 中维护）；如需回归测试，请在 monorepo 检出后运行 `npm test` 与
-`bash tests/e2e-standalone.sh`。
+本仓库是插件的**源码发布仓库**，只包含运行时源码（`lib/`、`locales/`）、配置模板（`cordis.patch.yml`）、
+`package.json` 与文档；测试文件、e2e 脚本与 `package-lock.json` **不随本仓库发布**。
+
+本地开发可直接运行上节的独立入口 `node lib/standalone.js`（读取 `AUTH_GATE_*` 环境变量）；服务端集成后的
+功能验证请按「安装」「配对与登录」章节在真实 dsh 实例上完成。
 
 ## 版本记录
 
