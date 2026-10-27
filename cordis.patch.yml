@@ -21,6 +21,8 @@
         upstream: https://192.0.2.10:3080
         upstreamInsecureTls: true
         publicUrl: https://192.0.2.10:3443
+        # 可选：对外证书指纹（frp/反向代理终止 TLS 时填，如 Caddy 证书 SHA-256）
+        publicFingerprint: ''
         tlsCert: /path/to/dsh.crt.pem
         tlsKey: /path/to/dsh.key.pem
         adminKeyFile: $DSH_HOME/auth-gate/admin.key
