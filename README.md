@@ -2,6 +2,13 @@
 
 DeepSeek Harness（dsh）的前台认证网关插件：**TOTP 授权的扫码设备配对 + 用户名密码登录**，认证通过后把请求反代到 dsh（含 WebSocket）。
 
+## 配套仓库
+
+| 仓库 | 说明 |
+| --- | --- |
+| [dsh-auth-gate](https://github.com/chjy090/dsh-auth-gate) | 本插件：dsh 服务端认证网关（扫码配对 / 会话 / TOTP） |
+| [DSH-Mobile](https://github.com/chjy090/DSH-Mobile) | Android 客户端：扫码配对、设备令牌自动续期；APK 与更新见 [Releases](https://github.com/chjy090/DSH-Mobile/releases) |
+
 目标部署是「单人自用」。v0.4.0 起认证模型是**设备绑定即第二因素**：
 
 1. 新设备先在管理页输入 **6 位 TOTP** 生成一次性配对二维码，扫码/打开链接完成绑定（`dsh_gate_device` cookie，默认 90 天）；
@@ -455,7 +462,7 @@ de12.de5.net:8443 {
 1. 管理页点「生成配对二维码」（或 `POST /__admin/api/qr`；**会话通道需在 body 带 `totp`（6 位动态验证码）**，adminKey 免）。返回的 `url` 形如
    `https://192.0.2.10:3443/__auth/pair#v=1&t=<ticket>&fp=<证书DER SHA256>&n=<主机名>`。
    票据只存在 fragment，服务端日志不会出现；TOTP/当前密码都不会进入 URL，也不会写入审计。
-2. 手机 App（DSH Mobile v0.4.0）扫码后比对 `fp` 与证书 SHA-256，然后 `POST /__auth/pair/redeem`
+2. 手机 App（[DSH Mobile](https://github.com/chjy090/DSH-Mobile)，当前 v0.4.5）扫码后比对 `fp` 与证书 SHA-256，然后 `POST /__auth/pair/redeem`
    换取 `deviceToken`，同时拿到 `HttpOnly; Secure; SameSite=Lax` 的设备 cookie（初始 `min(now+90 天, now+365 天)`，之后随 renew/登录滑动，绝对上限从配对时起算）。
 3. 打开网关地址：没有会话时 302 到 `/__auth/login?next=…`；输入**用户名 + 密码**（已配对设备无需 TOTP）。
    没有设备 cookie 时登录固定返回 `device_required`（先扫码配对）。
