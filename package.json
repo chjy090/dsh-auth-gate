@@ -1,9 +1,24 @@
 {
-  "name": "dsh-auth-gate",
-  "version": "0.7.1",
+  "name": "dsh-pairing-gate",
+  "version": "0.7.2",
   "type": "module",
   "main": "lib/index.js",
-  "description": "Front-door HTTPS auth gateway for DeepSeek Harness: TOTP-authorised QR device pairing + username/password login, reverse-proxying to a local dsh.",
+  "description": "Front-door HTTPS device-pairing gateway for DeepSeek Harness: TOTP-authorised QR device pairing, username/password login, sliding sessions and a reverse proxy with WebSocket tunnelling to a local dsh.",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "auth",
+    "gateway",
+    "remote"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chjy090/dsh-pairing-gate.git"
+  },
+  "homepage": "https://github.com/chjy090/dsh-pairing-gate#readme",
+  "bugs": {
+    "url": "https://github.com/chjy090/dsh-pairing-gate/issues"
+  },
   "license": "MIT",
   "private": true,
   "files": [

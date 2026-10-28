@@ -1,10 +1,14 @@
-# dsh-auth-gate — 前台 HTTPS 认证网关（扫码设备验证 + 用户名密码 + TOTP）。
+# dsh-pairing-gate — 前台 HTTPS 认证网关（扫码设备验证 + 用户名密码 + TOTP）。
 #
 # 本文件由插件包通过 dsh.profile.bundles / dsh.bundle.patch 提供给 profile。
-# 安装：
+# 安装（本轮不执行，需用户自行安排）：
 #   dsh plugin --profile web add link:$PLUGIN_DIR
 # 或在 profile 的 cordis.patch.yml（$DSH_HOME/profiles/web/cordis.patch.yml）里
 # 直接追加下面这段 insert；随后重启 dsh。
+#
+# v0.6.0：管理页「网络设置」写入的 $DSH_HOME/auth-gate/network.json 会在启动时覆盖
+# 下面的 listenHost/listenPort/publicUrl（其它字段仍以本文件为准）；删除该文件并重启
+# 即可回退到这里的默认值。
 #
 # 安全提示：
 #   - listenHost 必须是具体网卡地址，不支持 0.0.0.0/::；只暴露给需要访问的网段。
@@ -14,21 +18,19 @@
 #     并在日志打印一次；请立即保存到密码管理器。
 - insert:
     - id: auth-gate
-      name: 'dsh-auth-gate'
+      name: 'dsh-pairing-gate'
       config:
-        listenHost: 192.0.2.10
+        listenHost: 172.16.180.14
         listenPort: 3443
-        upstream: https://192.0.2.10:3080
+        upstream: https://172.16.180.14:3080
         upstreamInsecureTls: true
-        publicUrl: https://192.0.2.10:3443
-        # 可选：对外证书指纹（frp/反向代理终止 TLS 时填，如 Caddy 证书 SHA-256）
-        publicFingerprint: ''
-        tlsCert: /path/to/dsh.crt.pem
-        tlsKey: /path/to/dsh.key.pem
+        publicUrl: https://172.16.180.14:3443
+        tlsCert: /opt/deepseekharness/config/tls/dsh.crt.pem
+        tlsKey: /opt/deepseekharness/config/tls/dsh.key.pem
         adminKeyFile: $DSH_HOME/auth-gate/admin.key
         stateDir: $DSH_HOME/auth-gate
-        sessionAbsoluteTtlDays: 30
         sessionTtlHours: 48
+        sessionAbsoluteTtlDays: 30
         deviceTtlDays: 90
         deviceAbsoluteTtlDays: 365
         maxDevices: 8

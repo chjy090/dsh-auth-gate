@@ -1,4 +1,6 @@
-# dsh-auth-gate
+# dsh-pairing-gate
+
+> **改名说明（v0.7.2）**：原名为 `dsh-auth-gate`，因 npm 上该包名已被 [TecFancy/dsh-auth-gate](https://github.com/TecFancy/dsh-auth-gate) 占用而改名；两者功能不同：本插件是**扫码设备配对 + 公网反代 + 管理面板/初始化向导**，后者是密码/共享令牌登录 + 用户管理 CLI。旧仓库链接会 301 跳转到 <https://github.com/chjy090/dsh-pairing-gate>。
 
 DeepSeek Harness（dsh）的前台认证网关插件：**TOTP 授权的扫码设备配对 + 用户名密码登录**，认证通过后把请求反代到 dsh（含 WebSocket）。
 
@@ -6,7 +8,7 @@ DeepSeek Harness（dsh）的前台认证网关插件：**TOTP 授权的扫码设
 
 | 仓库 | 说明 |
 | --- | --- |
-| [dsh-auth-gate](https://github.com/chjy090/dsh-auth-gate) | 本插件：dsh 服务端认证网关（扫码配对 / 会话 / TOTP） |
+| [dsh-pairing-gate](https://github.com/chjy090/dsh-pairing-gate) | 本插件：dsh 服务端设备配对网关（扫码配对 / 会话 / TOTP / 反代） |
 | [DSH-Mobile](https://github.com/chjy090/DSH-Mobile) | Android 客户端：扫码配对、设备令牌自动续期；APK 与更新见 [Releases](https://github.com/chjy090/DSH-Mobile/releases) |
 
 目标部署是「单人自用」。v0.4.0 起认证模型是**设备绑定即第二因素**：
@@ -29,7 +31,7 @@ v0.6.2 起，网络设置新增**对外证书指纹 `publicFingerprint`**：当 
 未认证的浏览器看不到 dsh 的 launch token，也拿不到 dsh 的会话 cookie。
 
 ```
-手机 / 浏览器 ──HTTPS(:3443)──> dsh-auth-gate（本插件自带监听）
+手机 / 浏览器 ──HTTPS(:3443)──> dsh-pairing-gate（本插件自带监听）
     │                             ├─ /__auth/*   登录页、CSRF、配对兑换、续期、登出
     │                             ├─ /__admin*   登录会话 / adminKey（loopback 监听时本机自动通道禁用）管理页与 API
     │                             └─ 其它路径 → 校验网关会话 → 反代 dsh（Host/Origin 改写、注入 dsh cookie、WS 隧道）
@@ -58,7 +60,7 @@ v0.6.2 起，网络设置新增**对外证书指纹 `publicFingerprint`**：当 
 ## 包结构
 
 ```
-dsh-auth-gate/
+dsh-auth-gate/              # 本地目录名保持不变；npm 包名为 dsh-pairing-gate
 ├── package.json
 ├── cordis.patch.yml      # 插件默认配置（insert 行）
 ├── lib/
@@ -86,7 +88,7 @@ dsh-auth-gate/
 
 前提：dsh 已经用 `--tls-cert/--tls-key` 原生 HTTPS 运行，证书路径与默认配置一致。
 
-> 说明：下文的 `$PLUGIN_DIR` 表示插件目录（monorepo 中为 `<仓库根>/dsh-auth-gate`，独立仓库中为仓库根目录）。
+> 说明：下文的 `$PLUGIN_DIR` 表示插件目录（monorepo 中为 `<仓库根>/dsh-auth-gate`，独立 clone 的仓库中为仓库根目录）。**目录名保持 `dsh-auth-gate` 不变，只是包名改为 `dsh-pairing-gate`**，以兼容已有的 profile link 与脚本。
 
 1. 在插件目录安装依赖（`qrcode`）：
 
@@ -105,7 +107,7 @@ dsh-auth-gate/
 
    ```yaml
    - id: auth-gate
-     name: 'dsh-auth-gate'
+     name: 'dsh-pairing-gate'
      config:
        listenHost: 192.0.2.10
        listenPort: 3443
@@ -133,10 +135,28 @@ dsh-auth-gate/
 ### 卸载
 
 ```bash
-dsh plugin --profile web remove dsh-auth-gate
+dsh plugin --profile web remove dsh-pairing-gate
+# 从旧名升级的用户第一次迁移时先 remove dsh-auth-gate，见下一节
 # 需要保留账号/设备时不要删除 $DSH_HOME/auth-gate；否则 rm -rf "$DSH_HOME/auth-gate"
 systemctl restart dsh
 ```
+
+### 从旧名 `dsh-auth-gate` 迁移
+
+v0.7.2 只改包名（仓库改为 [dsh-pairing-gate](https://github.com/chjy090/dsh-pairing-gate)，本地目录名仍是 `dsh-auth-gate`）。已以旧名安装的用户按下面三步迁移，**`state.json`、账号、TOTP、已配对设备、会话与 `network.json` 都不受影响**：
+
+```bash
+# 1) 移除旧名（会同时移除 dependency 与 bundles 条目）
+dsh plugin --profile web remove dsh-auth-gate
+
+# 2) 用新包名重新 link（目录路径不变）；或安装 npm 包 dsh-pairing-gate
+dsh plugin --profile web add link:/opt/ai_code/mobile-apk/dsh-auth-gate
+
+# 3) 重启，让服务端插件与 client bundle 按新包名重新组合
+systemctl restart dsh
+```
+
+迁移后 `$DSH_HOME/profiles/web/package.json` 的 dependency 键与 `dsh.profile.bundles` 都应为 `dsh-pairing-gate`（见 [docs/installation.md](docs/installation.md) 2.7.1）。若 profile 的 `cordis.patch.yml` 里还留着 `- id: auth-gate` 覆盖段，把其中的 `name:` 也改成 `dsh-pairing-gate`。
 
 ## 首次初始化（WebUI 向导，v0.5.0）
 
@@ -206,7 +226,7 @@ https://192.0.2.10:3443/__admin
 
 ### 原生侧边栏管理面板（v0.3.0）
 
-`dsh-auth-gate` 同时是一个 dsh **client 插件**：`package.json` 通过 `exports["./client"]` 暴露 `lib/client.js`，并声明
+`dsh-pairing-gate` 同时是一个 dsh **client 插件**：`package.json` 通过 `exports["./client"]` 暴露 `lib/client.js`，并声明
 
 ```json
 "dsh": {
@@ -603,8 +623,8 @@ node lib/standalone.js
 
 ## 版本与更新
 
-- **所有版本变更与发行说明统一发布在 GitHub Releases**：<https://github.com/chjy090/dsh-auth-gate/releases>。
-- **升级（link 安装）**：更新源码（`git pull` 或替换插件目录）→ `systemctl restart dsh`，无需重新 `dsh plugin add`。账号、TOTP、已配对设备、`state.json` 与 `network.json` 都会保留，无需迁移。
+- **所有版本变更与发行说明统一发布在 GitHub Releases**：<https://github.com/chjy090/dsh-pairing-gate/releases>。
+- **升级（link 安装）**：更新源码（`git pull` 或替换插件目录）→ `systemctl restart dsh`，无需重新 `dsh plugin add`。账号、TOTP、已配对设备、`state.json` 与 `network.json` 都会保留，无需迁移。**例外：v0.7.1 → v0.7.2 是改名版本**，profile 里仍记着旧包名 `dsh-auth-gate`，只 `git pull` + 重启会因新 bundle 名 `dsh-pairing-gate` 无法解析而加载失败；必须按「从旧名 `dsh-auth-gate` 迁移」先 `remove` 旧名再 `add link:`，然后重启。
 - **升级前建议备份**：`tar -czf ~/auth-gate-$(date +%F).tgz -C "$DSH_HOME" auth-gate`（含账号与设备，权限 0600）。
 - **回滚方式**：把源码切到目标 Release 对应的 tag/commit（或解压旧版本备份）→ `systemctl restart dsh`。旧版本会忽略新版本写入的多余 state 字段；仍建议回滚前备份 `$DSH_HOME/auth-gate`。
 - **查看当前版本**：`node -e "console.log(require('./package.json').version)"`。
@@ -617,7 +637,7 @@ npm test                       # node:test：password/base32/totp/ratelimit/stor
 bash tests/e2e-standalone.sh   # 真实 TLS 网关全流程（1~2 分钟，含 WebUI 会话通道 + 初始化向导 + 网络设置/热重建 + 对外证书指纹 + 滑动续期/吊销级联）
 ```
 
-当前基线（v0.7.1）：`npm test` **151/151 pass**；`bash tests/e2e-standalone.sh` → **E2E PASSED（27 步 / 37 PASS）**。第 21 步在 LAN 地址 + 独立 `stateDir` 的已初始化实例上验证 session+TOTP 改 publicUrl、QR 使用中转 origin、invalid 400、adminKey 恢复；第 22 步验证 LAN 地址上 3458→3459→3458 热重建（先绑新后关旧、旧端口关闭/新端口 200/network.json 持久化）；第 23 步验证通配地址（含 `::0`/`0::0`/`00::`/`::ffff:0.0.0.0`）、loopback（`127.0.0.1`/`::1`）、上游端口、http/https 不匹配均 400 且不持久化/不改监听，并验证「绑定成功但 network.json 持久化失败」时关闭新监听、旧端口继续 200；第 24 步验证损坏 `network.json` 启动回退到 bundle config；v0.7.1 新增/改动：第 3/11/19 步的 `no-store` 断言兼容 `private, no-store`；第 26 步新增注入时钟的 P2-1（cookie 响应头 + asset 不刷新）与 P2-3（旧设备越过绝对上限后 token/session 失效）场景；第 27 步对真实网关断言登录页/登录/renew 响应带 `private, no-store` + `Vary: cookie`，带会话 cookie 的 public asset 不返回 `Set-Cookie` 且不被要求登录。第 25 步验证 `publicFingerprint`：空值回退网关证书、固定值（大写归一）驱动 QR `fp=`、`"auto"` 对 setup 实例自身 TLS 握手读出证书指纹并落盘、探测失败（关闭端口）400 `fingerprint_fetch_failed` 且不落盘、session 写入仍须 TOTP、审计只留前 8 位。主网关仍监听 loopback，用于验证 P0 修复（无凭据读 state/admin-key 均 403，启动 WARN）。
+当前基线（v0.7.2，功能与 v0.7.1 相同，仅改名）：`npm test` **151/151 pass**；`bash tests/e2e-standalone.sh` → **E2E PASSED（27 步 / 37 PASS）**。第 21 步在 LAN 地址 + 独立 `stateDir` 的已初始化实例上验证 session+TOTP 改 publicUrl、QR 使用中转 origin、invalid 400、adminKey 恢复；第 22 步验证 LAN 地址上 3458→3459→3458 热重建（先绑新后关旧、旧端口关闭/新端口 200/network.json 持久化）；第 23 步验证通配地址（含 `::0`/`0::0`/`00::`/`::ffff:0.0.0.0`）、loopback（`127.0.0.1`/`::1`）、上游端口、http/https 不匹配均 400 且不持久化/不改监听，并验证「绑定成功但 network.json 持久化失败」时关闭新监听、旧端口继续 200；第 24 步验证损坏 `network.json` 启动回退到 bundle config；v0.7.1 新增/改动：第 3/11/19 步的 `no-store` 断言兼容 `private, no-store`；第 26 步新增注入时钟的 P2-1（cookie 响应头 + asset 不刷新）与 P2-3（旧设备越过绝对上限后 token/session 失效）场景；第 27 步对真实网关断言登录页/登录/renew 响应带 `private, no-store` + `Vary: cookie`，带会话 cookie 的 public asset 不返回 `Set-Cookie` 且不被要求登录。第 25 步验证 `publicFingerprint`：空值回退网关证书、固定值（大写归一）驱动 QR `fp=`、`"auto"` 对 setup 实例自身 TLS 握手读出证书指纹并落盘、探测失败（关闭端口）400 `fingerprint_fetch_failed` 且不落盘、session 写入仍须 TOTP、审计只留前 8 位。主网关仍监听 loopback，用于验证 P0 修复（无凭据读 state/admin-key 均 403，启动 WARN）。
 
 E2E 行为：
 
@@ -640,7 +660,7 @@ E2E 行为：
 | setup 接口返回 409 `already_configured` | 已经初始化，写接口永久关闭；请走密码登录或 adminKey 管理。若确需重新初始化，只能停机备份/清空 `$DSH_HOME/auth-gate`（丢失账号、设备与审计），不要只删 `setup.token`。 |
 | `setup.token` 仍存在但 `/__admin` 不是向导 | `state.json` 已配置；重启后 store 会自动删除残留文件。确认 `/__admin/api/state` 的 `configured`，并检查是否误删/覆盖了 state。 |
 | `/__admin` 302 到登录页 | 当前浏览器没有有效网关会话。先用已配对设备完成用户名+密码登录（不再需要 TOTP）；登录后会自动回到 `/__admin`。若账号不可用，改用 adminKey 应急（读 `$DSH_HOME/auth-gate/admin.key`）。未初始化时不会 302，而是直接显示向导。 |
-| 左侧栏没有「认证管理」条目 | 确认 profile 的 `dsh-auth-gate` 行已加载、`package.json` 含 `exports["./client"]` 和 `dsh.client`，重启 dsh 后看启动日志有无 client bundle/组合错误；浏览器硬刷新。 |
+| 左侧栏没有「认证管理」条目 | 确认 profile 的 `dsh-pairing-gate` 行已加载（旧名安装时为 `dsh-auth-gate`）、`package.json` 含 `exports["./client"]` 和 `dsh.client`，重启 dsh 后看启动日志有无 client bundle/组合错误；浏览器硬刷新。 |
 | 「认证管理」面板空白/一直加载 | v0.4.2 起面板有错误边界，真崩溃会显示「认证管理渲染失败」卡（`error.message` + 栈前 1500 字符）并在 Console 打印 `[auth-gate]` 日志，不再是整块空白。排查顺序：① 地址栏加 `?authgate-debug=1`（或 hash `#authgate-debug`）刷新，看顶部调试卡的 `location.href/port`、`React.version`、primitives 是否加载及 real/fallback 绑定、当前渲染分支；② F12 → Console 过滤 `[auth-gate]`，复制 `render failed` / `primitive failed` 行与栈；③ 立即兜底：点错误卡「打开独立管理页 /__admin」，或直接访问 `https://<网关地址>/__admin`（同源会话可直接用）；④ v0.6.0 起面板会探测同源 `GET /__admin/api/setup/status` 来判断是否由网关提供（不再只看 3443），探测失败才会显示「不是认证网关」说明卡，3080 直连显示说明卡是设计行为；仍空白则硬刷新并检查 dsh 启动日志里的 client bundle 错误。 |
 | Console 报 `GET …/manifest.webmanifest 401 (Unauthorized)` / favicon 401 | v0.4.3 起网关对 `manifest.webmanifest`、favicon、apple-touch-icon 与 `/assets/*` 的 **GET/HEAD** 放行，浏览器不带登录态也能取到这些静态 dist 文件（数据/API 路由仍 401/302）。若重启后仍报 401：确认加载的是 0.4.3+（`node -e "console.log(require('./package.json').version)"`）、请求方法确为 GET/HEAD、且路径未被改写；`/api/*`、`/plugins/*`、`/__admin*` 返回 401 属预期。 |
 | 从 3080 打开只看到提示 | 这是预期的优雅降级，不是故障；按提示改从 `https://<host>:3443` 访问。 |

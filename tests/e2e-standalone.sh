@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# End-to-end test for dsh-auth-gate's standalone front door.
+# End-to-end test for dsh-pairing-gate's standalone front door.
 #
 # The production dsh at 192.0.2.10:3080 is never touched or restarted. Its
 # launch token is printed only at boot; if this host's journal no longer holds

@@ -4,3 +4,6 @@ node_modules/
 .test-tmp/
 .test-dsh-home/
 *.log
+
+# npm pack output (uploaded to GitHub Releases, never committed)
+*.tgz

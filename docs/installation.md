@@ -1,8 +1,10 @@
-# dsh-auth-gate 安装与配置操作手册
+# dsh-pairing-gate 安装与配置操作手册
 
-本文是 `dsh-auth-gate` 的**可照做安装手册**，覆盖：前置要求、安装进 dsh、配置项、两种首次初始化方式、设备配对与登录、frp/Caddy 网络拓扑、日常运维、故障排查、安全模型和安装后自检。
+> **v0.7.2 改名**：本插件原名 `dsh-auth-gate`，因 npm 上该包名已被 [TecFancy/dsh-auth-gate](https://github.com/TecFancy/dsh-auth-gate) 占用，改为 `dsh-pairing-gate`；仓库为 <https://github.com/chjy090/dsh-pairing-gate>，旧仓库链接会 301 跳转。本地/生产**目录名仍为 `dsh-auth-gate`**，状态目录 `$DSH_HOME/auth-gate` 不变，state/账号/设备无需迁移。
 
-- 适用版本：`dsh-auth-gate` **v0.7.1**（`package.json`）；v0.7.1 为 v0.7.0 的 P2 安全修复，配置与 `state.json` 格式不变。
+本文是 `dsh-pairing-gate` 的**可照做安装手册**，覆盖：前置要求、安装进 dsh、配置项、两种首次初始化方式、设备配对与登录、frp/Caddy 网络拓扑、日常运维、故障排查、安全模型和安装后自检。
+
+- 适用版本：`dsh-pairing-gate` **v0.7.2**（`package.json`）；v0.7.2 仅改包名/仓库名（原名 `dsh-auth-gate`），功能、配置与 `state.json` 格式与 v0.7.1 一致；旧名安装的迁移步骤见 2.7.1。
 - 验证基线：dsh **0.2.1-rc.2**、Node.js **v22.23.2**、pnpm **12.15.0**、npm **10.9.8**（2026-10 的实际部署）。
 - 读者：拥有 dsh 服务器 root 权限、准备把认证网关放到公网入口的管理员。
 - 协议：单用户自用。**设备配对就是第二因素**：配对时需要 TOTP，配对成功后该设备登录只需用户名 + 密码。
@@ -80,7 +82,7 @@ curl -sk -X POST "$GATE_URL/__admin/api/qr" \
 
 | 端口 | 用途 | 暴露范围 |
 |---|---|---|
-| `3443/tcp` | dsh-auth-gate 自己的 HTTPS 监听 | 只给需要访问的网段 / frpc 所在主机；**不要用 loopback 监听** |
+| `3443/tcp` | dsh-pairing-gate 自己的 HTTPS 监听 | 只给需要访问的网段 / frpc 所在主机；**不要用 loopback 监听** |
 | `3080/tcp` | dsh 原生 HTTPS 监听（网关的上游） | **只对内网开放**，绝不能直接暴露公网 |
 | `23443/tcp`（示例） | frps 为网关开放的 TCP `remotePort`（TLS 直通） | 公网只开放这一个 |
 | `18080/tcp`（示例） | frps 为 Caddy 回源开放的 TCP `remotePort` | 只让 Caddy 所在主机访问 |
@@ -152,7 +154,8 @@ sudo systemctl show dsh -p User -p Group
 方式 A：独立 clone 到固定目录（推荐生产）：
 
 ```bash
-sudo git clone <仓库地址> /opt/dsh-auth-gate
+# 仓库：https://github.com/chjy090/dsh-pairing-gate（原名 dsh-auth-gate，旧链接 301）
+sudo git clone https://github.com/chjy090/dsh-pairing-gate.git /opt/dsh-auth-gate
 export PLUGIN_DIR=/opt/dsh-auth-gate
 test -f "$PLUGIN_DIR/package.json" && echo "plugin dir ok"
 ```
@@ -263,7 +266,7 @@ $DSH_HOME/profiles/web/cordis.patch.yml
 ```yaml
 - insert:
     - id: auth-gate
-      name: 'dsh-auth-gate'
+      name: 'dsh-pairing-gate'
       config:
         # 同上，完整配置
 ```
@@ -299,9 +302,9 @@ sudo env DSH_HOME="$DSH_HOME" PATH="$PATH" \
 
 这条命令实际发生的事：
 
-1. `dsh plugin` 把参数转发给 profile 目录里的 pnpm，执行类似 `pnpm add link:/opt/.../dsh-auth-gate` 的操作；
-2. pnpm 在 `$DSH_HOME/profiles/web/package.json` 的 `dependencies` 中写入 `"dsh-auth-gate": "link:/opt/.../dsh-auth-gate"`，并在 `node_modules` 下建立符号链接；
-3. pnpm 成功后，dsh 读取该包的 `package.json`，发现 `dsh.bundle.patch = ./cordis.patch.yml`，自动把 `dsh-auth-gate` 追加到 `dsh.profile.bundles`；
+1. `dsh plugin` 把参数转发给 profile 目录里的 pnpm，执行类似 `pnpm add link:/opt/.../dsh-auth-gate` 的操作（路径仍是目录名 `dsh-auth-gate`）；
+2. pnpm 在 `$DSH_HOME/profiles/web/package.json` 的 `dependencies` 中写入 `"dsh-pairing-gate": "link:/opt/.../dsh-auth-gate"`（键取包名，路径是目录），并在 `node_modules` 下建立同名符号链接；
+3. pnpm 成功后，dsh 读取该包的 `package.json`，发现 `dsh.bundle.patch = ./cordis.patch.yml`，自动把 `dsh-pairing-gate` 追加到 `dsh.profile.bundles`；
 4. 因此**不需要手工编辑 `dsh.profile.bundles`**；下次启动 dsh 时，插件自带的 `cordis.patch.yml` 会作为 bundle 层生效。
 
 可能看到的输出/告警：
@@ -313,12 +316,12 @@ sudo env DSH_HOME="$DSH_HOME" PATH="$PATH" \
 验证安装结果：
 
 ```bash
-jq '{dep:.dependencies["dsh-auth-gate"],
-     inBundles:(.dsh.profile.bundles | index("dsh-auth-gate") != null)}' \
+jq '{dep:.dependencies["dsh-pairing-gate"],
+     inBundles:(.dsh.profile.bundles | index("dsh-pairing-gate") != null)}' \
   "$DSH_HOME/profiles/web/package.json"
 
-readlink -f "$DSH_HOME/profiles/web/node_modules/dsh-auth-gate"
-# 期望输出 $PLUGIN_DIR
+readlink -f "$DSH_HOME/profiles/web/node_modules/dsh-pairing-gate"
+# 期望输出 $PLUGIN_DIR（符号链接名取包名，指向目录 dsh-auth-gate）
 ```
 
 如果 `inBundles` 为 `false`，检查是否装到了错误的 `DSH_HOME`（例如 `/root/.dsh`），或 `package.json` 的 `dsh.bundle` 是否被破坏。
@@ -432,6 +435,7 @@ sudo journalctl -u dsh -n 100 --no-pager | grep -E 'auth-gate|failed to start'
 注意：
 
 - **不要**在升级后重新执行 `dsh plugin add`；link 依赖没有变，重新 add 只会多一次 pnpm 操作，没有收益。
+- **例外（v0.7.1 → v0.7.2 改名）**：包名从 `dsh-auth-gate` 变为 `dsh-pairing-gate`，profile 里记录的仍是旧名，只 `git pull` + 重启会因 bundle 名 `dsh-pairing-gate` 无法解析而加载失败。**必须先按 2.7.1 执行 `remove dsh-auth-gate` → `add link:$PLUGIN_DIR`**，再重启；state 与账号不受影响。
 - 客户端面板（侧边栏「认证管理」）在 dsh 启动时组合，**必须重启 dsh**，并在浏览器硬刷新（Ctrl/Cmd+Shift+R）丢弃旧 bundle 缓存。
 - 证书文件替换也必须重启 dsh；`network.json` 中的 `publicFingerprint` 不会自动跟着证书变。
 - 如果新版本要求新的 dsh/Node 版本，先用隔离 `DSH_HOME` + 独立 `stateDir` 验证，再动生产。
@@ -444,15 +448,16 @@ export DSH_HOME=/opt/deepseekharness/config/dsh
 export STATE_DIR="$DSH_HOME/auth-gate"
 
 # 1) 从 profile 移除（自动移除 dependency 与 bundles 条目，并调用 pnpm）
+#    旧名安装的用户第一次迁移时用 dsh-auth-gate，见 2.7.1
 sudo env DSH_HOME="$DSH_HOME" PATH="$PATH" \
-  dsh plugin --profile web remove dsh-auth-gate
+  dsh plugin --profile web remove dsh-pairing-gate
 
 # 2) 重启 dsh；侧边栏入口与网关监听随之消失
 sudo systemctl restart dsh
 
 # 3) 确认已移除
-jq '{dep:.dependencies["dsh-auth-gate"],
-     inBundles:(.dsh.profile.bundles | index("dsh-auth-gate") != null)}' \
+jq '{dep:.dependencies["dsh-pairing-gate"],
+     inBundles:(.dsh.profile.bundles | index("dsh-pairing-gate") != null)}' \
   "$DSH_HOME/profiles/web/package.json"
 ```
 
@@ -468,6 +473,40 @@ jq '{dep:.dependencies["dsh-auth-gate"],
 
   删除前务必确认已备份；删除 `network.json` 也会让运行时网络覆盖失效（回退 bundle config，需重启）。
 - dsh 的 3080 不受插件卸载影响；继续保持只对内网开放。
+
+### 2.7.1 从旧名 `dsh-auth-gate` 迁移（v0.7.2）
+
+v0.7.2 只改包名与仓库名，**本地目录名、配置项与状态目录都没有变**，所以迁移不影响账号、TOTP、已配对设备、会话、审计与 `network.json`：
+
+```bash
+export DSH_HOME=/opt/deepseekharness/config/dsh
+export PLUGIN_DIR=/opt/ai_code/mobile-apk/dsh-auth-gate   # 目录名不变
+
+# 1) 移除旧包名（自动移除 dependency 与 bundles 条目）
+sudo env DSH_HOME="$DSH_HOME" PATH="$PATH" \
+  dsh plugin --profile web remove dsh-auth-gate
+
+# 2) 用新包名重新 link 同一目录；也可以 npm 安装 dsh-pairing-gate
+sudo env DSH_HOME="$DSH_HOME" PATH="$PATH" \
+  dsh plugin --profile web add link:"$PLUGIN_DIR"
+
+# 3) 重启，让服务端插件与 client bundle 按新包名重新组合
+sudo systemctl restart dsh
+```
+
+迁移后核对：
+
+```bash
+jq '{dep:.dependencies["dsh-pairing-gate"],
+     inBundles:(.dsh.profile.bundles | index("dsh-pairing-gate") != null),
+     old:(.dependencies["dsh-auth-gate"] // "absent")}' \
+  "$DSH_HOME/profiles/web/package.json"
+# 期望 dep 为 link:...、inBundles 为 true、old 为 absent
+```
+
+- 若 profile 的 `cordis.patch.yml` 里有 `- id: auth-gate` 覆盖段，把 `name:` 改成 `dsh-pairing-gate`（或删掉 `name` 只保留 `id`）。
+- 状态目录仍是 `$DSH_HOME/auth-gate`（`state.json` / `admin.key` / `network.json`），不需要搬移或重建。
+- 回滚到 v0.7.1 时反向操作：`remove dsh-pairing-gate` → `add link:$PLUGIN_DIR`（旧版本 package.json 的 name 是 `dsh-auth-gate`）。
 
 ### 2.8 安装完成的判定标准
 
@@ -537,7 +576,7 @@ jq '{dep:.dependencies["dsh-auth-gate"],
 # $DSH_HOME/profiles/web/cordis.patch.yml
 # 覆盖插件 bundle 的默认配置。config 整体替换，不要只写单个字段。
 - id: auth-gate
-  name: 'dsh-auth-gate'        # 可选：断言目标条目名，写错会跳过该 patch
+  name: 'dsh-pairing-gate'      # 可选：断言目标条目名，写错会跳过该 patch
   config:
     # --- 监听与上游 ---
     listenHost: 172.16.180.14   # 必须是本机 LAN 地址；禁止 127.0.0.1 / 0.0.0.0
@@ -1773,12 +1812,13 @@ sudo tar -C "$(dirname "${STATE_DIR:?}")" -czpf "/root/auth-gate-$(date +%F-%H%M
 sudo systemctl start dsh
 
 # 卸载
-sudo env DSH_HOME="$DSH_HOME" PATH="$PATH" dsh plugin --profile web remove dsh-auth-gate
+sudo env DSH_HOME="$DSH_HOME" PATH="$PATH" dsh plugin --profile web remove dsh-pairing-gate
 sudo systemctl restart dsh
 ```
 
 ### 11.5 相关文档
 
+- 插件仓库：<https://github.com/chjy090/dsh-pairing-gate>（旧链接 301）；版本与发行说明见 [Releases](https://github.com/chjy090/dsh-pairing-gate/releases)
 - 插件 README（功能、API、设计细节、变更记录）：[`../README.md`](../README.md)
 - README 的「安装」章节摘要：[`../README.md`](../README.md)
 - 网络设置/ frp 细节：README 的「网络设置 / frp 内网穿透」章节
