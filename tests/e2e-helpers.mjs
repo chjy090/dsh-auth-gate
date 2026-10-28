@@ -151,15 +151,31 @@ switch (command) {
     break;
   }
   case 'redeem-json': {
-    writeFileSync(
-      args[0],
-      JSON.stringify({
-        ticket: process.env.E2E_TICKET ?? '',
-        deviceName: process.env.E2E_DEVICE_NAME ?? 'e2e-device',
-        platform: process.env.E2E_PLATFORM ?? 'android'
-      }),
-      { mode: 0o600 }
-    );
+    const payload = {
+      ticket: process.env.E2E_TICKET ?? '',
+      deviceName: process.env.E2E_DEVICE_NAME ?? 'e2e-device',
+      platform: process.env.E2E_PLATFORM ?? 'android'
+    };
+    // v0.7.3: optional stable client-side device id for same-device re-pairing.
+    if (process.env.E2E_CLIENT_DEVICE_ID !== undefined) payload.clientDeviceId = process.env.E2E_CLIENT_DEVICE_ID;
+    writeFileSync(args[0], JSON.stringify(payload), { mode: 0o600 });
+    break;
+  }
+  case 'json-length': {
+    const [file, path] = args;
+    const value = getPath(readJson(file), path);
+    if (!Array.isArray(value)) die(`${path} in ${file} is not an array`);
+    process.stdout.write(`${value.length}\n`);
+    break;
+  }
+  case 'session-count': {
+    // Count stored sessions of one device in state.json. Used by the v0.7.3 P1
+    // race step: after a re-pairing, no session of the device may remain.
+    const [file, deviceId] = args;
+    if (!deviceId) die('session-count requires a device id');
+    const state = readJson(file);
+    const sessions = Array.isArray(state.sessions) ? state.sessions : [];
+    process.stdout.write(`${sessions.filter((session) => session.deviceId === deviceId).length}\n`);
     break;
   }
   case 'renew-json': {

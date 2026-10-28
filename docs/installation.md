@@ -4,7 +4,7 @@
 
 本文是 `dsh-pairing-gate` 的**可照做安装手册**，覆盖：前置要求、安装进 dsh、配置项、两种首次初始化方式、设备配对与登录、frp/Caddy 网络拓扑、日常运维、故障排查、安全模型和安装后自检。
 
-- 适用版本：`dsh-pairing-gate` **v0.7.2**（`package.json`）；v0.7.2 仅改包名/仓库名（原名 `dsh-auth-gate`），功能、配置与 `state.json` 格式与 v0.7.1 一致；旧名安装的迁移步骤见 2.7.1。
+- 适用版本：`dsh-pairing-gate` **v0.7.3**（`package.json`）；v0.7.3 新增 `clientDeviceId` 重复配对去重并把 `maxDevices` 默认值调到 100，`state.json` 向后兼容（旧设备无 `clientDeviceId` 视为无）。v0.7.2 仅改包名/仓库名（原名 `dsh-auth-gate`），功能、配置与 `state.json` 格式与 v0.7.1 一致；旧名安装的迁移步骤见 2.7.1。
 - 验证基线：dsh **0.2.1-rc.2**、Node.js **v22.23.2**、pnpm **12.15.0**、npm **10.9.8**（2026-10 的实际部署）。
 - 读者：拥有 dsh 服务器 root 权限、准备把认证网关放到公网入口的管理员。
 - 协议：单用户自用。**设备配对就是第二因素**：配对时需要 TOTP，配对成功后该设备登录只需用户名 + 密码。
@@ -249,7 +249,7 @@ $DSH_HOME/profiles/web/cordis.patch.yml
     sessionAbsoluteTtlDays: 30     # 绝对上限（天，自会话创建起算；0 = 无上限）
     deviceTtlDays: 90              # 设备滑动窗口（天）
     deviceAbsoluteTtlDays: 365     # 设备绝对上限（天，自配对起算；0 = 无上限）
-    maxDevices: 8
+    maxDevices: 100
     pairTicketTtlSeconds: 120
     loginLock:
       maxFailures: 5
@@ -556,7 +556,7 @@ jq '{dep:.dependencies["dsh-pairing-gate"],
 | `sessionAbsoluteTtlDays` | 整数，默认 `30` | 0–3650；0 = 无绝对上限 | 会话**绝对上限**（天，自 `createdAt` 起算）。即使持续活跃，到点后会话也立即失效。 |
 | `deviceTtlDays` | 整数，默认 `90` | 1–3650 | 已配对设备的**滑动窗口**；每次 `renew` 成功或密码登录成功推进到 `min(now + 窗口, 配对时间 + 绝对上限)`，设备 cookie 按新的剩余时长重发。 |
 | `deviceAbsoluteTtlDays` | 整数，默认 `365` | 0–3650；0 = 无绝对上限 | 设备**绝对上限**（天，自配对创建起算）；到点后设备记录被 prune（同时删除其全部 session），必须重新配对。 |
-| `maxDevices` | 整数，默认 `8` | 1–100 | 活跃设备上限；达到上限时配对返回 `device_limit`，先吊销旧设备。 |
+| `maxDevices` | 整数，默认 `100` | 1–100 | 活跃设备上限；达到上限时**新**设备配对返回 `device_limit`，先吊销旧设备；带未过期 `clientDeviceId` 的重复配对是原地替换，不受此限制。 |
 | `pairTicketTtlSeconds` | 整数，默认 `120` | 1–3600 | 一次性配对票据有效期；二维码过期需重新生成。 |
 | `loginLock.maxFailures` | 整数，默认 `5` | 1–100 | 同一 IP + 用户名在窗口内允许的失败次数。 |
 | `loginLock.windowMinutes` | 整数，默认 `15` | 1–1440 | 失败计数窗口。 |
@@ -601,7 +601,7 @@ jq '{dep:.dependencies["dsh-pairing-gate"],
     sessionAbsoluteTtlDays: 30     # 绝对上限（天，自会话创建起算；0 = 无上限）
     deviceTtlDays: 90              # 设备滑动窗口（天）
     deviceAbsoluteTtlDays: 365     # 设备绝对上限（天，自配对起算；0 = 无上限）
-    maxDevices: 8
+    maxDevices: 100
     pairTicketTtlSeconds: 120
     loginLock:
       maxFailures: 5
@@ -1046,7 +1046,7 @@ curl -sk -X POST "$GATE_URL/__admin/api/qr" \
 - 已完成初始化（`configured:true`）；
 - 有有效管理能力：登录会话、或 `x-auth-gate-admin-key`；
 - `publicUrl` 与证书指纹正确（frp/Caddy 场景先设好 `publicFingerprint`）；
-- 设备数量未达 `maxDevices`（默认 8）。
+- 设备数量未达 `maxDevices`（默认 100）；已有同 `clientDeviceId` 的未过期设备时，重复配对走原地替换，不占新名额。
 
 ### 5.2 浏览器配对
 
@@ -1066,11 +1066,35 @@ curl -sk -X POST "$GATE_URL/__admin/api/qr" \
 1. 管理页「配对」选择「安卓」，输入 TOTP（会话通道）生成二维码；
 2. 用 DSH Mobile 扫码；
 3. App 先比对二维码里的 `fp` 与它实际看到的证书 SHA-256（fail-closed），不一致会拒绝连接；
-4. App 调 `POST /__auth/pair/redeem`，拿到 `deviceToken` 并保存设备 cookie；
+4. App 调 `POST /__auth/pair/redeem`，拿到 `deviceToken` 并保存设备 cookie；建议在 body 里带稳定的 `clientDeviceId`（安装 ID），重装后再次扫码不会产生重复设备记录（见 5.3.1）；
 5. 在 App 里用用户名 + 密码登录；
 6. 会话过期时 App 用 `POST /__auth/renew`（JSON body 的 `deviceToken`，**不需要密码**）换新会话。
 
 `fp` 不匹配的典型原因：TLS 在 Caddy 处终止但没设 `publicFingerprint`，或代理证书续期后没重新读取。见第 6、8 节。
+
+### 5.3.1 同一设备重复配对：`clientDeviceId`（v0.7.3）
+
+`POST /__auth/pair/redeem` 的 JSON body 新增可选 `clientDeviceId`（客户端生成的稳定安装 ID，合法格式 `^[A-Za-z0-9._-]{8,64}$`）。浏览器配对不传该字段，行为完全不变。
+
+- **缺失**：保持现行「每次兑现票据都新建一条设备记录」。
+- **非法**（非字符串、长度不在 8–64、含非法字符）：**400 `invalid_client_device_id`**，审计 `pair_redeem`（detail `invalid_client_device_id`），票据**不消耗**，可用合法值重试；store 层收到非法值同样返回 `invalid_client_device_id`，不会静默当成缺失而新建。
+- **合法且存在未过期（`expiresAt > now`）的同 ID 设备**：原地复用同一 `device.id`，更新 `name`/`platform`/`origin`/`lastSeenAt`，生成新 `deviceToken`（旧 tokenHash 立即失效，旧 token 的 `/__auth/renew` → 401），**删除该设备全部旧 session**，**清空全部其它待用配对票据**（重新配对 = 完整凭据重置，与吊销设备同级联；替换前签发的其它票据 redeem 均返回 `invalid_ticket`），`createdAt = now`（重新配对 = 重新验证，绝对上限窗口重置），`expiresAt = min(now + deviceTtlDays, createdAt + deviceAbsoluteTtlDays)`；不新增设备、不占新名额、不触发 `device_limit`，响应带 `replaced: true` 并回显 `clientDeviceId`。
+- **合法但没有匹配设备**：按现行逻辑新建（含 `maxDevices` 检查），响应 `replaced: false`；回显 `clientDeviceId`。
+- 并发同 ID 的 redeem 由 store 锁串行；最终只保留一条设备记录，只有最后一次轮换出的 token 有效。
+- `clientDeviceId` 只是去重提示，不是认证因子，必须使用安装级高熵随机值（App 使用 UUID）；它仅保存在内部 `state.json`（可选字段，旧设备无该字段视为无），管理 API/审计/日志不展示。
+
+```bash
+# 第一次：新建（replaced=false）
+curl -k -X POST -H 'content-type: application/json' \
+  -d '{"ticket":"t_xxx","clientDeviceId":"android-install-9f2c1a7b","deviceName":"Pixel 8","platform":"android"}' \
+  "$GATE_URL/__auth/pair/redeem"
+
+# 旧 token 失效后，用同一 ID 重新扫码：原地替换（replaced=true，deviceId 不变，设备总数不变）
+curl -k -X POST -H 'content-type: application/json' \
+  -d '{"ticket":"t_yyy","clientDeviceId":"android-install-9f2c1a7b","deviceName":"Pixel 8","platform":"android"}' \
+  "$GATE_URL/__auth/pair/redeem"
+# → {"deviceToken":"dt_…","deviceId":"d_…","replaced":true,"clientDeviceId":"android-install-9f2c1a7b",...}
+```
 
 ### 5.4 登录、会话、续期、登出
 
@@ -1106,7 +1130,7 @@ curl -sk -X POST "$GATE_URL/__admin/api/qr" \
 
 - 票据 TTL 默认 `120` 秒（`pairTicketTtlSeconds`），服务端只存 SHA-256，票据只在 URL fragment，不进日志；
 - 票据一次性：成功兑换后失效；重复兑换返回 401 `invalid_ticket`；过期返回 401 `expired_ticket`；
-- 设备达到上限：401 `device_limit`，先吊销旧设备；
+- 设备达到上限：新设备 401 `device_limit`，先吊销旧设备；带未过期 `clientDeviceId` 的重复配对原地替换，不受上限影响；
 - 配对/续期按 IP 限 30 次/分钟；QR 签发按 IP 限 10 次/分钟；会话通道的配对 TOTP 失败 5 次锁 5 分钟；超出 429 `rate_limited`（带 `Retry-After`）；
 - 登录失败：同一 IP + 用户名窗口内 5 次失败锁 15 分钟（可配）；成功一次清零；
 - 错误响应统一 JSON `{error:"..."}`；页面/审计不含密码、TOTP、票据、deviceToken。
@@ -1510,7 +1534,7 @@ curl -sk -o /dev/null -w 'root_html=%{http_code} %{redirect_url}\n' -H 'Accept: 
 | 初始化向导 409 `already_configured` | 已有用户，setup 写接口永久关闭 | 用密码登录或 adminKey 管理；确需重来只能停机备份/清空 `$STATE_DIR`（丢失全部数据） |
 | 初始化 token 无效/过期 | token 一次性；轮换后旧 token 失效；初始化已完成 | 用 adminKey `POST /__admin/api/setup/token` 取新链接（仅未初始化）；已初始化则走登录 |
 | 二维码兑换 401 `invalid_ticket` / `expired_ticket` | 票据一次性/超过 120 秒/已被使用/服务端重启丢失 | 重新生成；确保手机/服务器时间同步；不要重复打开旧链接 |
-| 配对 401 `device_limit` | 活跃设备达到 `maxDevices`（默认 8） | 管理页吊销不用/过期设备；或提高 `maxDevices`（需重启/配置） |
+| 配对 401 `device_limit` | 活跃设备达到 `maxDevices`（默认 100）；注意带同一 `clientDeviceId` 的替换不受限 | 管理页吊销不用/过期设备；或提高 `maxDevices`（需重启/配置） |
 | 403 `csrf_invalid` | 会话/loopback 通道 POST 缺少 `x-auth-gate-csrf` 或与 `dsh_gate_csrf` cookie 不一致 | 用管理页操作；脚本用 adminKey（免 CSRF）；不要手写无 CSRF 的会话 POST |
 | 403 `totp_required` / `totp_invalid` | 会话通道生成配对码/改网络设置必须带 6 位 TOTP；手机/服务器时间偏差超过 ±1 窗口 | 输入当前验证码；同步时间（NTP）；或用 adminKey 通道 |
 | 403 `invalid_current_password` | 会话通道改密码/重置 TOTP 必须当前密码 | 输入当前密码；忘记则用 adminKey 重置 |
@@ -1673,7 +1697,7 @@ sudo firewall-cmd --list-all | sed -n '1,40p'
 ```bash
 cd "$PLUGIN_DIR"
 
-# 单测（v0.7.1 基线 151/151）
+# 单测（v0.7.3 基线 167/167）
 npm test
 
 # 独立网关 E2E（1~2 分钟；会启动临时 dsh/网关，使用独立 DSH_HOME/stateDir）
@@ -1691,7 +1715,7 @@ E2E 说明：
 
 已实测（2026-10，生产实例只读检查）：
 
-- `npm test` → **151/151 pass**（v0.7.1）；`bash tests/e2e-standalone.sh` → **E2E PASSED（27 步 / 37 PASS）**（本轮已实际运行：第 26 步注入时钟的滑动/绝对上限 + v0.7.1 P2-1/P2-3 场景；第 27 步真实网关的 cookie 缓存头与 public asset 不重发 cookie）；
+- `npm test` → **167/167 pass**（v0.7.3；含 `tests/client-device-id.test.js` 9 项与 P2 加固新增的 4 项：非法 `clientDeviceId` 不降级、替换清空待用票据、重复非空 `clientDeviceId` 拒绝启动、`maxDevices` 1/100 边界）；`bash tests/e2e-standalone.sh` → **E2E PASSED（29 步 / 39 PASS）**（本轮已实际运行：第 26 步注入时钟的滑动/绝对上限 + v0.7.1 P2-1/P2-3 场景；第 27 步真实网关的 cookie 缓存头与 public asset 不重发 cookie；第 28 步同一 `clientDeviceId` 重配 → 设备记录数不变、旧 token 401、新 token 200、非法 ID 400 且审计为 `pair_redeem`、管理 API 不暴露 ID；第 29 步并发旧 token renew 与同 ID 重配交错后旧 session 为 0）；
 - `GET /__auth/whoami` → `{"authenticated":false}`；
 - `GET /__admin/api/setup/status` → `{"configured":true,"hasToken":false,...}`；
 - `GET /`（默认 Accept）→ 401；`Accept: text/html` → 302；
@@ -1716,6 +1740,7 @@ E2E 说明：
 - v0.4.0：TOTP 从登录移到配对；登录只看已配对设备 + 用户名密码；
 - v0.5.0：WebUI 首次初始化向导（setup.token，一次链接；自动配对当前浏览器）；
 - v0.6.0：管理页网络设置；`publicUrl` 影响二维码；监听热重建；设备 origin 变化返回 `origin_changed`；
+- v0.7.3：`maxDevices` 默认 8 → 100；`POST /__auth/pair/redeem` 接受可选 `clientDeviceId`（8–64 位 `[A-Za-z0-9._-]`），同一未过期 ID 原地复用设备：轮换 token、删除旧 session、重置绝对上限窗口、不占新名额；缺失仍每次新建，非法 400 `invalid_client_device_id`；
 - v0.7.1：P2 安全修复（无新功能）——带会话/设备 cookie 的响应统一 `private, no-store` + `Vary: cookie`，public asset 不刷新会话/不重发 cookie；`extendDevice`/设备读取不再返回 `tokenHash`；设备绝对上限在**所有读路径**生效，越限设备及其全部 session 立即删除（旧 state / 调低 `deviceAbsoluteTtlDays` 无需等到下一次 renew/登录）；单测 147→151、e2e 26→27 步；
 - v0.7.0：设备/会话改为「滑动窗口 + 绝对上限」（48h/30d 会话、90d/365d 设备，均可在配置里关掉绝对上限）；`renew`/登录重发设备 cookie 并返回 `deviceExpiresAt`；会话刷新重发 `dsh_gate_session`；吊销设备级联删除其全部 session 与待用 ticket，过期 prune 同时删 session；
 - v0.6.1：安全修复（P0）：拒绝 loopback 监听、loopback 管理通道在监听 loopback 时禁用、热重建先绑新后关旧、`network.json` 损坏回退；
@@ -1770,7 +1795,8 @@ $STATE_DIR/network.json                      # 运行时网络覆盖（0600）
 | `totp_required` / `totp_invalid` | 403 | 会话通道配对/网络设置 TOTP |
 | `invalid_current_password` | 403 | 会话通道改密/重置 TOTP |
 | `invalid_ticket` / `expired_ticket` | 401 | 配对票据非法/过期 |
-| `device_limit` | 401 | 设备达到上限 |
+| `device_limit` | 401 | 活跃设备达到上限（带同 `clientDeviceId` 的替换不受限） |
+| `invalid_client_device_id` | 400 | `clientDeviceId` 格式非法（缺失则按新建处理） |
 | `already_configured` | 409 | 初始化后调 setup/bootstrap |
 | `invalid_listen_host` | 400 | 通配/loopback/非 IP/带括号 |
 | `invalid_listen_port` | 400 | 端口越界/等于上游端口 |

@@ -35,6 +35,9 @@ test('plain-HTTP defaults resolve and publicUrl is derived', async () => {
   assert.equal(resolved.sessionAbsoluteTtlDays, 30);
   assert.equal(resolved.deviceTtlDays, 90);
   assert.equal(resolved.deviceAbsoluteTtlDays, 365);
+  // v0.7.3: 8 -> 100 devices by default (range stays 1-100).
+  assert.equal(resolved.maxDevices, 100);
+  assert.equal(gatewayConfig(resolved).maxDevices, 100);
   assert.equal(gatewayConfig(resolved).sessionAbsoluteTtlDays, 30);
   assert.equal(gatewayConfig(resolved).deviceAbsoluteTtlDays, 365);
   assert.deepEqual(resolved.loginLock, { maxFailures: 5, windowMinutes: 15, lockMinutes: 15 });
@@ -147,6 +150,19 @@ test('$DSH_HOME expansion and admin key path defaults', async () => {
   );
   assert.equal(resolved.stateDir, path.join(dir, 'auth-gate'));
   assert.equal(resolved.adminKeyFile, path.join(dir, 'auth-gate', 'admin.key'));
+});
+
+test('maxDevices accepts the inclusive 1-100 bounds and rejects out-of-range values', async () => {
+  const dir = await tempDir();
+  const base = { listenHost: '127.0.0.1', listenPort: 3456, upstream: 'http://127.0.0.1:3999', stateDir: dir };
+  for (const value of [1, 100]) {
+    const resolved = await resolveConfig({ ...base, maxDevices: value }, { env: TEST_ENV });
+    assert.equal(resolved.maxDevices, value);
+    assert.equal(gatewayConfig(resolved).maxDevices, value);
+  }
+  for (const value of [0, 101]) {
+    await assert.rejects(resolveConfig({ ...base, maxDevices: value }, { env: TEST_ENV }), /maxDevices/u);
+  }
 });
 
 test('bad numeric and URL values are rejected', async () => {

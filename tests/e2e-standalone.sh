@@ -1492,5 +1492,153 @@ esac
 pass "cookie responses carry private/no-store + Vary: cookie; assets stay cookie-less and public"
 
 # ---------------------------------------------------------------------------
+step "28. v0.7.3 same clientDeviceId re-pairs one device (token rotated, old token 401)"
+CLIENT_DEVICE_ID='e2e-stable-device-0001'
+QR_REUSE_1_CODE=$(request_qr "$TMP/qr-reuse-1.json")
+assert_eq "$QR_REUSE_1_CODE" 200 "QR for re-pairing #1"
+REUSE_TICKET_1=$(node tests/e2e-helpers.mjs ticket "$TMP/qr-reuse-1.json")
+JAR_REUSE="$TMP/jar-reuse"
+REUSE_CODE_1=$(E2E_CLIENT_DEVICE_ID="$CLIENT_DEVICE_ID" \
+  redeem_ticket "$REUSE_TICKET_1" "$JAR_REUSE" "$TMP/redeem-reuse-1.json" e2e-stable android)
+assert_eq "$REUSE_CODE_1" 200 "pair/redeem with clientDeviceId"
+assert_eq "$(json_get "$TMP/redeem-reuse-1.json" replaced)" "false" "first redeem with an id is not a replacement"
+assert_eq "$(json_get "$TMP/redeem-reuse-1.json" clientDeviceId)" "$CLIENT_DEVICE_ID" "clientDeviceId echo"
+REUSE_DEVICE_ID_1=$(json_get "$TMP/redeem-reuse-1.json" deviceId)
+REUSE_TOKEN_OLD=$(json_get "$TMP/redeem-reuse-1.json" deviceToken)
+[ -n "$REUSE_DEVICE_ID_1" ] && [ -n "$REUSE_TOKEN_OLD" ] || fail "re-pairing redeem returned no device id/token"
+# The client-side identifier is internal state only; the manage API must not
+# expose it (only the paired record in state.json may carry it).
+curl -sk --max-time 10 -H "x-auth-gate-admin-key: $ADMIN_KEY" -o "$TMP/admin-state-reuse-1.json" "$BASE/__admin/api/state"
+assert_file_lacks "$TMP/admin-state-reuse-1.json" 'clientDeviceId' "manage API must not expose clientDeviceId"
+assert_file_contains "$STATE/state.json" "\"clientDeviceId\": \"$CLIENT_DEVICE_ID\"" "state.json keeps the internal clientDeviceId"
+REUSE_COUNT_1=$(node tests/e2e-helpers.mjs json-length "$TMP/admin-state-reuse-1.json" devices)
+
+QR_REUSE_2_CODE=$(request_qr "$TMP/qr-reuse-2.json")
+assert_eq "$QR_REUSE_2_CODE" 200 "QR for re-pairing #2"
+REUSE_TICKET_2=$(node tests/e2e-helpers.mjs ticket "$TMP/qr-reuse-2.json")
+REUSE_CODE_2=$(E2E_CLIENT_DEVICE_ID="$CLIENT_DEVICE_ID" \
+  redeem_ticket "$REUSE_TICKET_2" "$JAR_REUSE" "$TMP/redeem-reuse-2.json" e2e-stable-renamed web)
+assert_eq "$REUSE_CODE_2" 200 "second pair/redeem with the same clientDeviceId"
+assert_eq "$(json_get "$TMP/redeem-reuse-2.json" replaced)" "true" "second redeem is a replacement"
+assert_eq "$(json_get "$TMP/redeem-reuse-2.json" deviceId)" "$REUSE_DEVICE_ID_1" "replacement keeps the same device id"
+REUSE_TOKEN_NEW=$(json_get "$TMP/redeem-reuse-2.json" deviceToken)
+[ "$REUSE_TOKEN_NEW" != "$REUSE_TOKEN_OLD" ] || fail "replacement must rotate the device token"
+curl -sk --max-time 10 -H "x-auth-gate-admin-key: $ADMIN_KEY" -o "$TMP/admin-state-reuse-2.json" "$BASE/__admin/api/state"
+REUSE_COUNT_2=$(node tests/e2e-helpers.mjs json-length "$TMP/admin-state-reuse-2.json" devices)
+assert_eq "$REUSE_COUNT_2" "$REUSE_COUNT_1" "re-pairing must not add a device record (got $REUSE_COUNT_1 -> $REUSE_COUNT_2)"
+assert_file_lacks "$TMP/admin-state-reuse-2.json" 'clientDeviceId' "manage API still hides clientDeviceId after a replacement"
+
+# The old device token is dead immediately; the rotated one still renews.
+E2E_DEVICE_TOKEN="$REUSE_TOKEN_OLD" node tests/e2e-helpers.mjs renew-json "$TMP/renew-reuse-old.json"
+REUSE_OLD_RENEW_CODE=$(curl -sk --max-time 20 -o "$TMP/renew-reuse-old.out.json" -w '%{http_code}' \
+  -X POST "$BASE/__auth/renew" -H 'content-type: application/json' --data-binary @"$TMP/renew-reuse-old.json")
+assert_eq "$REUSE_OLD_RENEW_CODE" 401 "the pre-replacement device token must not renew"
+assert_eq "$(json_get "$TMP/renew-reuse-old.out.json" error)" "device_required" "old token renew error"
+E2E_DEVICE_TOKEN="$REUSE_TOKEN_NEW" node tests/e2e-helpers.mjs renew-json "$TMP/renew-reuse-new.json"
+REUSE_NEW_RENEW_CODE=$(curl -sk --max-time 20 -c "$JAR_REUSE" -b "$JAR_REUSE" -o "$TMP/renew-reuse-new.out.json" -w '%{http_code}' \
+  -X POST "$BASE/__auth/renew" -H 'content-type: application/json' --data-binary @"$TMP/renew-reuse-new.json")
+assert_eq "$REUSE_NEW_RENEW_CODE" 200 "the rotated device token renews"
+assert_eq "$(json_get "$TMP/renew-reuse-new.out.json" deviceId)" "$REUSE_DEVICE_ID_1" "renewal resolves the same device"
+[ -n "$(node tests/e2e-helpers.mjs cookie "$JAR_REUSE" dsh_gate_session)" ] || fail "rotated token renew set no session cookie"
+
+# A malformed id is 400 invalid_client_device_id and leaves the ticket usable.
+QR_REUSE_3_CODE=$(request_qr "$TMP/qr-reuse-3.json")
+assert_eq "$QR_REUSE_3_CODE" 200 "QR for the invalid-id check"
+REUSE_TICKET_3=$(node tests/e2e-helpers.mjs ticket "$TMP/qr-reuse-3.json")
+REUSE_BAD_CODE=$(E2E_CLIENT_DEVICE_ID='bad id!' \
+  redeem_ticket "$REUSE_TICKET_3" "$JAR_REUSE" "$TMP/redeem-reuse-bad.json" e2e-bad android)
+assert_eq "$REUSE_BAD_CODE" 400 "invalid clientDeviceId"
+assert_eq "$(json_get "$TMP/redeem-reuse-bad.json" error)" "invalid_client_device_id" "invalid clientDeviceId error"
+curl -sk --max-time 10 -H "x-auth-gate-admin-key: $ADMIN_KEY" -o "$TMP/admin-state-reuse-3.json" "$BASE/__admin/api/state"
+assert_eq "$(node tests/e2e-helpers.mjs json-length "$TMP/admin-state-reuse-3.json" devices)" "$REUSE_COUNT_2" "rejected redeem creates no device"
+curl -sk --max-time 10 -H "x-auth-gate-admin-key: $ADMIN_KEY" -o "$TMP/audit-reuse.json" "$BASE/__admin/api/audit"
+assert_file_contains "$TMP/audit-reuse.json" '"detail":"replaced"' "audit marks the replacement"
+assert_file_contains "$TMP/audit-reuse.json" '"detail":"invalid_client_device_id"' "audit records the rejected id as pair_redeem"
+pass "same clientDeviceId: one device record, rotated token (old 401/new 200), invalid id 400; manage API hides the id"
+
+# ---------------------------------------------------------------------------
+step "29. v0.7.3 P1 concurrent old-token renewals vs re-pairing leave zero sessions"
+# The token that is valid at the end of step 28 (`REUSE_TOKEN_NEW`) is about to
+# be rotated by another same-id re-pairing while renew requests using it are
+# still in flight. The store must never mint a session for the rotated token.
+RACE_TOKEN="$REUSE_TOKEN_NEW"
+E2E_DEVICE_TOKEN="$RACE_TOKEN" node tests/e2e-helpers.mjs renew-json "$TMP/race-seed-payload.json"
+RACE_SEED_COUNT=5
+for i in $(seq 1 "$RACE_SEED_COUNT"); do
+  RACE_SEED_CODE=$(curl -sk --max-time 20 -o "$TMP/race-seed-$i.json" -w '%{http_code}' \
+    -X POST "$BASE/__auth/renew" -H 'content-type: application/json' \
+    --data-binary @"$TMP/race-seed-payload.json")
+  assert_eq "$RACE_SEED_CODE" 200 "seed renewal #$i"
+done
+RACE_SESSIONS_BEFORE=$(node tests/e2e-helpers.mjs session-count "$STATE/state.json" "$REUSE_DEVICE_ID_1")
+[ "$RACE_SESSIONS_BEFORE" -ge "$RACE_SEED_COUNT" ] || fail "seed renewals created no sessions (got $RACE_SESSIONS_BEFORE)"
+
+E2E_DEVICE_TOKEN="$RACE_TOKEN" node tests/e2e-helpers.mjs renew-json "$TMP/race-renew-old-payload.json"
+QR_RACE_CODE=$(request_qr "$TMP/qr-race.json")
+assert_eq "$QR_RACE_CODE" 200 "QR for the interleaved replacement"
+RACE_TICKET=$(node tests/e2e-helpers.mjs ticket "$TMP/qr-race.json")
+E2E_TICKET="$RACE_TICKET" E2E_DEVICE_NAME='e2e-race' E2E_PLATFORM=android \
+  E2E_CLIENT_DEVICE_ID="$CLIENT_DEVICE_ID" node tests/e2e-helpers.mjs redeem-json "$TMP/redeem-race-payload.json"
+
+# Fire the old-token renewals, then land the re-pairing while they are in
+# flight. Statuses are collected even though the requests run concurrently.
+: > "$TMP/race-codes.txt"
+RACE_PIDS=''
+for i in $(seq 1 8); do
+  (
+    curl -sk --max-time 20 -o "$TMP/race-old-$i.json" -w '%{http_code}\n' \
+      -X POST "$BASE/__auth/renew" -H 'content-type: application/json' \
+      --data-binary @"$TMP/race-renew-old-payload.json" >> "$TMP/race-codes.txt"
+  ) &
+  RACE_PIDS="$RACE_PIDS $!"
+done
+sleep 0.05
+(
+  curl -sk --max-time 20 -o "$TMP/redeem-race.json" -w '%{http_code}' \
+    -X POST "$BASE/__auth/pair/redeem" -H 'content-type: application/json' \
+    --data-binary @"$TMP/redeem-race-payload.json" > "$TMP/race-redeem-code.txt"
+) &
+RACE_PIDS="$RACE_PIDS $!"
+for pid in $RACE_PIDS; do
+  wait "$pid" || fail "a concurrent race request failed"
+done
+
+RACE_REDEEM_CODE=$(cat "$TMP/race-redeem-code.txt")
+assert_eq "$RACE_REDEEM_CODE" 200 "interleaved re-pairing"
+assert_eq "$(json_get "$TMP/redeem-race.json" replaced)" "true" "interleaved redeem is a replacement"
+assert_eq "$(json_get "$TMP/redeem-race.json" deviceId)" "$REUSE_DEVICE_ID_1" "interleaved replacement keeps the device id"
+RACE_TOKEN_NEW=$(json_get "$TMP/redeem-race.json" deviceToken)
+[ "$RACE_TOKEN_NEW" != "$RACE_TOKEN" ] || fail "the interleaved replacement must rotate the device token"
+
+while IFS= read -r code; do
+  case "$code" in
+    200|401) ;;
+    *) fail "old-token renewal returned an unexpected status [$code]" ;;
+  esac
+done < "$TMP/race-codes.txt"
+assert_eq "$(wc -l < "$TMP/race-codes.txt" | tr -d ' ')" "8" "all concurrent old-token renewals answered"
+# Whether a renewal committed before the replacement (200) or after it (401),
+# the replacement's session deletion is the last word: zero sessions remain.
+RACE_SESSIONS_AFTER=$(node tests/e2e-helpers.mjs session-count "$STATE/state.json" "$REUSE_DEVICE_ID_1")
+assert_eq "$RACE_SESSIONS_AFTER" 0 "no session of the device survives the replacement"
+
+E2E_DEVICE_TOKEN="$RACE_TOKEN" node tests/e2e-helpers.mjs renew-json "$TMP/race-renew-dead-payload.json"
+RACE_DEAD_CODE=$(curl -sk --max-time 20 -o "$TMP/race-renew-dead.json" -w '%{http_code}' \
+  -X POST "$BASE/__auth/renew" -H 'content-type: application/json' \
+  --data-binary @"$TMP/race-renew-dead-payload.json")
+assert_eq "$RACE_DEAD_CODE" 401 "the rotated token must not renew afterwards"
+assert_eq "$(json_get "$TMP/race-renew-dead.json" error)" "device_required" "rotated token renew error"
+
+E2E_DEVICE_TOKEN="$RACE_TOKEN_NEW" node tests/e2e-helpers.mjs renew-json "$TMP/race-renew-live-payload.json"
+RACE_LIVE_CODE=$(curl -sk --max-time 20 -o "$TMP/race-renew-live.json" -w '%{http_code}' \
+  -X POST "$BASE/__auth/renew" -H 'content-type: application/json' \
+  --data-binary @"$TMP/race-renew-live-payload.json")
+assert_eq "$RACE_LIVE_CODE" 200 "the replacement token renews"
+assert_eq "$(json_get "$TMP/race-renew-live.json" deviceId)" "$REUSE_DEVICE_ID_1" "the replacement token resolves the same device"
+assert_eq "$(node tests/e2e-helpers.mjs session-count "$STATE/state.json" "$REUSE_DEVICE_ID_1")" 1 "only the replacement's session exists"
+pass "concurrent old-token renewals + replacement: $RACE_SESSIONS_BEFORE -> 0 sessions, old token 401, replacement token 200"
+
+
+# ---------------------------------------------------------------------------
 step "result"
 printf 'E2E PASSED\n'

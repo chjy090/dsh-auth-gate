@@ -21,8 +21,10 @@ v0.5.0 起，全新部署的首次初始化可以完全在浏览器完成：网�
 
 v0.6.0 起，管理页（服务端 `/__admin` 与原生侧边栏「设置」tab）可以修改**监听地址/端口**与**对外访问地址 `publicUrl`**。后者用于生成配对二维码/链接，因此可以填 frp 中转后的公网 IP/域名；改监听地址会**即时重建监听**（无需重启 dsh），失败自动回滚。详见「网络设置 / frp 内网穿透」。
 
-v0.7.0 起，**设备令牌与登录会话都改为「滑动窗口 + 绝对上限」**：App 每次 `POST /__auth/renew` 成功或密码登录成功，都会把设备有效期推进到 `min(now + deviceTtlDays, 配对时间 + deviceAbsoluteTtlDays)`，并重发设备 cookie；Web 会话每次已认证的 HTTP 请求在满足刷新条件时把 `expiresAt` 推进到 `min(now + sessionTtlHours, 创建时间 + sessionAbsoluteTtlDays)`，并重发 `dsh_gate_session`（同一 token，新的 `Max-Age`）。默认 `sessionTtlHours: 48`（空闲窗口）、`sessionAbsoluteTtlDays: 30`、`deviceTtlDays: 90`、`deviceAbsoluteTtlDays: 365`（0 = 无绝对上限）。**吊销设备会级联删除该设备的全部会话并清空待用配对票据**，旧 deviceToken、所有 session cookie 与设备 cookie 在下一次请求立即失效。
+v0.7.0 起，**设备令牌与登录会话都改为「滑动窗口 + 绝对上限」**：App 每次 `POST /__auth/renew` 成功或密码登录成功，都会把设备有效期推进到 `min(now + deviceTtlDays, 配对时间 + deviceAbsoluteTtlDays)`，并重发设备 cookie；Web 会话每次已认证的 HTTP 请求在满足刷新条件时把 `expiresAt` 推进到 `min(now + sessionTtlHours, 创建时间 + sessionAbsoluteTtlDays)`，并重发 `dsh_gate_session`（同一 token，新的 `Max-Age`）。默认 `sessionTtlHours: 48`（空闲窗口）、`sessionAbsoluteTtlDays: 30`、`deviceTtlDays: 90`、`deviceAbsoluteTtlDays: 365`（0 = 无绝对上限）。**吊销设备会级联删除该设备的全部会话并清空待用配对票据**，旧 deviceToken、所有 session cookie 与设备 cookie 在下一次 HTTP 请求立即失效（已建立的 WebSocket 隧道不会因此立即断开，需等连接自然关闭）。
 v0.7.1 是 v0.7.0 的 P2 安全修复（无新功能、配置/state 格式不变）：① 带会话/设备 cookie 的响应统一 `cache-control: private, no-store` + `vary: cookie`，并且 public asset 请求不再刷新会话、不再附带 `Set-Cookie`（防止前置共享缓存缓存并回放他人会话）；② `extendDevice` 及设备读取结果不再返回 `tokenHash`；③ 设备绝对上限改为**所有读路径**立即生效（`findDeviceByToken`/`findDeviceById` 命中 `createdAt + deviceAbsoluteTtlDays <= now` 即删除设备及其全部 session），旧 `state.json` 设备或调低 `deviceAbsoluteTtlDays` 后不再能活到下一次 renew/登录。
+
+v0.7.3 起，`POST /__auth/pair/redeem` 接受可选的 `clientDeviceId`（客户端生成的稳定安装 ID），用于**同一设备重复配对去重**：同一 ID 且旧记录未过期时原地复用 `device.id`、轮换 `deviceToken`（旧 token 立即失效）、删除该设备全部旧会话、把 `createdAt` 重置为本次配对时间（绝对上限重新起算）、清空全部其它待用配对票据，不新增设备也不占新名额、不触发 `device_limit`；响应带 `replaced`（`true`/`false`）并回显 `clientDeviceId`。浏览器配对不传该字段，行为不变；`maxDevices` 默认值从 8 调整为 **100**（范围仍为 1–100）。详见「配对与登录」第 6 条。
 
 v0.6.2 起，网络设置新增**对外证书指纹 `publicFingerprint`**：当 TLS 由 frp 后面的反向代理（如 Caddy）终止时，浏览器看到的是代理证书，而 App 会按二维码里的 `fp=` 做 fail-closed pinning。此时把代理证书的 SHA-256 DER 填进该字段（或点「从对外地址自动读取」），二维码就按公网实际证书 pinning，App 可正常配对；留空仍使用网关自身证书。
 
@@ -46,7 +48,7 @@ v0.6.2 起，网络设置新增**对外证书指纹 `publicFingerprint`**：当 
 - 前台 HTTPS 监听（默认 `192.0.2.10:3443`），TLS 1.2+，HSTS。
 - 登录两要素：**已配对设备 cookie**（配对时由 6 位 TOTP 授权）+ 用户名密码（scrypt）。正常登录不填 TOTP；未配对设备固定返回 `device_required`。
 - 扫码配对：管理页（登录会话通道）必须输入认证器当前的 **6 位 TOTP**；校验只验证、不消耗登录重放计数器，所以同一 30 秒窗口可连续生成多个二维码，实际签发仍按 IP 限 10 次/分钟。一次性票据默认 120 秒、服务端只存 SHA-256；二维码只把票据放在 **URL fragment**，不会发给服务器或日志。
-- 设备管理：最多 8 台、默认 90 天；每台设备可单独吊销，吊销立即失效其会话。
+- 设备管理：默认最多 100 台、默认 90 天；每台设备可单独吊销，吊销立即失效其会话；同一客户端可用 `clientDeviceId` 重复配对，仍只占一条记录。
 - **WebUI 管理页**：登录后打开 `/__admin` 即可管理账号、生成配对二维码/链接、查看设备与会话、吊销设备、重置 TOTP、修改网络设置、查看审计（详见「WebUI 管理页」）。
 - **网络设置（v0.6.0 / v0.6.1 / v0.6.2）**：管理页可修改监听地址/端口、对外地址 `publicUrl` 与对外证书指纹 `publicFingerprint`。`publicUrl` 立刻用于新的配对二维码/链接（frp 场景填中转公网 IP/域名）；`publicFingerprint` 留空表示使用网关自身 TLS 证书，填 64 位 SHA-256（或 POST `"auto"` 自动读取 publicUrl 的证书）后二维码 `fp=` 改用公网实际证书，App 可按代理证书 pinning；监听地址/端口采用**先绑新、后关旧**的热重建（先绑定成功再持久化，失败时旧监听全程可用）；监听地址必须是本机 LAN 地址，拒绝 loopback 与通配地址；覆盖值持久化到 `$DSH_HOME/auth-gate/network.json`（0600），重启后仍生效。
 - **原生侧边栏管理面板（v0.3.0）**：dsh 左侧栏「全局面板」的「认证管理」入口改为 **React + dsh 设计系统** 原生面板（不再用 iframe）：顶部状态、配对二维码/倒计时/复制、改密、重置 TOTP、设备/会话表格、最近 100 条审计；20 秒轮询（页面隐藏时暂停）、CSRF 双提交、429 倒计时、未登录/会话失效跳转登录。从 3080 直连时只显示跳转 3443 的说明卡，不发 API 请求。
@@ -482,14 +484,34 @@ de12.de5.net:8443 {
 1. 管理页点「生成配对二维码」（或 `POST /__admin/api/qr`；**会话通道需在 body 带 `totp`（6 位动态验证码）**，adminKey 免）。返回的 `url` 形如
    `https://192.0.2.10:3443/__auth/pair#v=1&t=<ticket>&fp=<证书DER SHA256>&n=<主机名>`。
    票据只存在 fragment，服务端日志不会出现；TOTP/当前密码都不会进入 URL，也不会写入审计。
-2. 手机 App（[DSH Mobile](https://github.com/chjy090/DSH-Mobile)，当前 v0.4.5）扫码后比对 `fp` 与证书 SHA-256，然后 `POST /__auth/pair/redeem`
-   换取 `deviceToken`，同时拿到 `HttpOnly; Secure; SameSite=Lax` 的设备 cookie（初始 `min(now+90 天, now+365 天)`，之后随 renew/登录滑动，绝对上限从配对时起算）。
+2. 手机 App（[DSH Mobile](https://github.com/chjy090/DSH-Mobile)，当前 v0.4.6）扫码后比对 `fp` 与证书 SHA-256，然后 `POST /__auth/pair/redeem`
+   换取 `deviceToken`，同时拿到 `HttpOnly; Secure; SameSite=Lax` 的设备 cookie（初始 `min(now+90 天, now+365 天)`，之后随 renew/登录滑动，绝对上限从配对时起算）。App 建议在 body 里带稳定的 `clientDeviceId`（见第 6 条），这样重装/重新扫码不会堆出重复设备记录。
 3. 打开网关地址：没有会话时 302 到 `/__auth/login?next=…`；输入**用户名 + 密码**（已配对设备无需 TOTP）。
    没有设备 cookie 时登录固定返回 `device_required`（先扫码配对）。
 4. 登录成功得到 48 小时空闲窗口的会话（绝对上限 30 天）；活跃使用会滑动续期并重发 cookie；`/__auth/whoami` 可查看当前用户/设备；`/__auth/logout` 注销会话（设备保留）。
 5. App 侧会话过期时用设备 token `POST /__auth/renew`（**只接受 JSON body 的 `deviceToken`**）换新会话，无需重新扫码；
    成功时设备有效期同时滑动，响应带 `deviceExpiresAt` 并重发设备 cookie（`Max-Age` 为新的剩余时长）。
    为防 CSRF/免密续期被跨站利用，不再接受“无 body 时回退 `dsh_gate_device` cookie”的旧路径。
+6. **同一设备重复配对（v0.7.3）**：`POST /__auth/pair/redeem` 的 JSON body 可带可选 `clientDeviceId`（合法格式 `^[A-Za-z0-9._-]{8,64}$`，例如 App 首次启动生成的安装 ID；浏览器配对不传，行为不变）。若该字段合法、且存在**未过期**（`expiresAt > now`）的同 ID 设备：
+   - **原地复用同一 `device.id`**，更新 `name`/`platform`/`origin`/`lastSeenAt`；
+   - **轮换 `deviceToken`**：旧 `tokenHash` 立即失效，旧 token 的 `/__auth/renew` 返回 401；
+   - **删除该设备全部旧 session**：旧 `dsh_gate_session` 立即未认证；
+   - **清空全部其它待用配对票据**：重新配对 = 完整凭据重置，与吊销设备同级联；替换前签发的其它票据 redeem 均返回 `invalid_ticket`（当前这张已消费）；
+   - `createdAt = now`（重新配对 = 重新验证，**绝对上限窗口重新起算**），`expiresAt = min(now + deviceTtlDays, createdAt + deviceAbsoluteTtlDays)`；
+   - 不新增设备、不占新名额、**不触发 `device_limit`**；即使已达到 `maxDevices`（默认 100），已有 ID 仍可替换成功；新 ID 才按上限检查；
+   - 响应 200 增加 `replaced: true` 并回显 `clientDeviceId`；新建时 `replaced: false`（不传 ID 时也不回显）。
+   缺失该字段保持「每次新建」；提供但格式非法（非字符串、长度不在 8–64、含非法字符）返回 **400 `invalid_client_device_id`**，审计 `pair_redeem`（detail `invalid_client_device_id`），且**不消耗票据**（store 层同样拒绝非法值，不会静默降级为新建）。并发同 ID 的 redeem 由 store 锁串行，最终只有一条设备记录。`clientDeviceId` 只是去重提示，不是认证因子，必须使用安装级高熵随机值（App 使用 UUID）；它仅存内部 `state.json`，管理 API/审计/日志不展示。v0.7.3 起，登录/renew 的设备 token 校验、滑动续期与会话创建在 store 锁内一次完成（`authenticateDeviceToken`）：即使替换与在途的旧 token 请求并发，旧 token 也只会得到 401，或它刚创建的会话被替换删除，不会在替换后留下存活会话。
+
+> **Caveat**：上述「立即失效」针对后续 HTTP 请求与 `/__auth/renew`；已建立的 WebSocket 隧道不会因 session 删除而立即断开，需等连接自然关闭。并发下的 token 轮换保证已由 v0.7.3 原子校验保证，不会在替换后留下存活会话。
+
+```bash
+# 同一 App 安装 ID 重新配对：第一次 replaced=false，第二次 replaced=true（设备数不变）
+curl -k -X POST -H 'content-type: application/json' \
+  -d '{"ticket":"t_xxx","clientDeviceId":"android-install-9f2c1a7b","deviceName":"Pixel 8","platform":"android"}' \
+  "$BASE/__auth/pair/redeem"
+# → {"deviceToken":"dt_…","deviceId":"d_…","replaced":false,...}
+# 旧 deviceToken 立即 401，新 deviceToken 可正常 POST /__auth/renew
+```
 
 ### 日常运维
 
@@ -614,7 +636,7 @@ node lib/standalone.js
 | `AUTH_GATE_SESSION_ABSOLUTE_TTL_DAYS` | 会话绝对上限（天，自创建起算），默认 30；0 = 无上限 |
 | `AUTH_GATE_DEVICE_TTL_DAYS` | 设备滑动空闲窗口（天），默认 90 |
 | `AUTH_GATE_DEVICE_ABSOLUTE_TTL_DAYS` | 设备绝对上限（天，自配对起算），默认 365；0 = 无上限 |
-| `AUTH_GATE_MAX_DEVICES` | 设备上限，默认 8 |
+| `AUTH_GATE_MAX_DEVICES` | 设备上限，默认 100（范围 1–100） |
 | `AUTH_GATE_PAIR_TICKET_TTL_SECONDS` | 配对票据 TTL，默认 120 |
 | `AUTH_GATE_LOGIN_MAX_FAILURES` / `..._WINDOW_MINUTES` / `..._LOCK_MINUTES` | 登录锁定参数 |
 | `DSH_TOKEN_URL` / `DSH_TOKEN` | 兑换 dsh cookie 的 launch URL / 裸 token |
@@ -633,11 +655,11 @@ node lib/standalone.js
 
 ```bash
 cd $PLUGIN_DIR
-npm test                       # node:test：password/base32/totp/ratelimit/store/sliding/qr/fingerprint/config/network/proxy/dsh-session/pages/gateway-401/admin-session/setup/client-render
+npm test                       # node:test：password/base32/totp/ratelimit/store/sliding/qr/fingerprint/config/network/proxy/dsh-session/pages/gateway-401/admin-session/setup/client-render/device-token-atomic
 bash tests/e2e-standalone.sh   # 真实 TLS 网关全流程（1~2 分钟，含 WebUI 会话通道 + 初始化向导 + 网络设置/热重建 + 对外证书指纹 + 滑动续期/吊销级联）
 ```
 
-当前基线（v0.7.2，功能与 v0.7.1 相同，仅改名）：`npm test` **151/151 pass**；`bash tests/e2e-standalone.sh` → **E2E PASSED（27 步 / 37 PASS）**。第 21 步在 LAN 地址 + 独立 `stateDir` 的已初始化实例上验证 session+TOTP 改 publicUrl、QR 使用中转 origin、invalid 400、adminKey 恢复；第 22 步验证 LAN 地址上 3458→3459→3458 热重建（先绑新后关旧、旧端口关闭/新端口 200/network.json 持久化）；第 23 步验证通配地址（含 `::0`/`0::0`/`00::`/`::ffff:0.0.0.0`）、loopback（`127.0.0.1`/`::1`）、上游端口、http/https 不匹配均 400 且不持久化/不改监听，并验证「绑定成功但 network.json 持久化失败」时关闭新监听、旧端口继续 200；第 24 步验证损坏 `network.json` 启动回退到 bundle config；v0.7.1 新增/改动：第 3/11/19 步的 `no-store` 断言兼容 `private, no-store`；第 26 步新增注入时钟的 P2-1（cookie 响应头 + asset 不刷新）与 P2-3（旧设备越过绝对上限后 token/session 失效）场景；第 27 步对真实网关断言登录页/登录/renew 响应带 `private, no-store` + `Vary: cookie`，带会话 cookie 的 public asset 不返回 `Set-Cookie` 且不被要求登录。第 25 步验证 `publicFingerprint`：空值回退网关证书、固定值（大写归一）驱动 QR `fp=`、`"auto"` 对 setup 实例自身 TLS 握手读出证书指纹并落盘、探测失败（关闭端口）400 `fingerprint_fetch_failed` 且不落盘、session 写入仍须 TOTP、审计只留前 8 位。主网关仍监听 loopback，用于验证 P0 修复（无凭据读 state/admin-key 均 403，启动 WARN）。
+当前基线（v0.7.3）：`npm test` **167/167 pass**；`bash tests/e2e-standalone.sh` → **E2E PASSED（29 步 / 39 PASS）**（`tests/client-device-id.test.js` 9 项、`tests/device-token-atomic.test.js` 6 项；e2e 第 28 步验证同一 `clientDeviceId` 重配：设备记录数不变、旧 token renew 401、新 token renew 200、非法 ID 400、管理 API 不回显该 ID；第 29 步验证并发旧 token renew 与同 ID 重配交错后旧 session 为 0、旧 token 401、新 token 200）。P2 加固新增 4 项单测：store 层非法 `clientDeviceId` 拒绝且票据仍可用、替换清空其它待用票据、重复非空 `clientDeviceId` 的 state 拒绝启动、`maxDevices` 1/100 边界接受而 0/101 拒绝。第 21 步在 LAN 地址 + 独立 `stateDir` 的已初始化实例上验证 session+TOTP 改 publicUrl、QR 使用中转 origin、invalid 400、adminKey 恢复；第 22 步验证 LAN 地址上 3458→3459→3458 热重建（先绑新后关旧、旧端口关闭/新端口 200/network.json 持久化）；第 23 步验证通配地址（含 `::0`/`0::0`/`00::`/`::ffff:0.0.0.0`）、loopback（`127.0.0.1`/`::1`）、上游端口、http/https 不匹配均 400 且不持久化/不改监听，并验证「绑定成功但 network.json 持久化失败」时关闭新监听、旧端口继续 200；第 24 步验证损坏 `network.json` 启动回退到 bundle config；v0.7.1 新增/改动：第 3/11/19 步的 `no-store` 断言兼容 `private, no-store`；第 26 步新增注入时钟的 P2-1（cookie 响应头 + asset 不刷新）与 P2-3（旧设备越过绝对上限后 token/session 失效）场景；第 27 步对真实网关断言登录页/登录/renew 响应带 `private, no-store` + `Vary: cookie`，带会话 cookie 的 public asset 不返回 `Set-Cookie` 且不被要求登录。第 25 步验证 `publicFingerprint`：空值回退网关证书、固定值（大写归一）驱动 QR `fp=`、`"auto"` 对 setup 实例自身 TLS 握手读出证书指纹并落盘、探测失败（关闭端口）400 `fingerprint_fetch_failed` 且不落盘、session 写入仍须 TOTP、审计只留前 8 位。主网关仍监听 loopback，用于验证 P0 修复（无凭据读 state/admin-key 均 403，启动 WARN）。
 
 E2E 行为：
 
@@ -647,7 +669,7 @@ E2E 行为：
 - 会话通道的 E2E 请求通过 `curl --interface <本机非 loopback IP>` 模拟 LAN 客户端（默认取 `hostname -I` 的第一个非 127 地址，可用 `E2E_SOURCE_IP` 覆盖）；v0.6.1 起主网关监听 loopback 时本机自动通道已禁用，会话仍必须完整通过 CSRF/TOTP/currentPassword。不需要改防火墙或额外监听端口。
 - 默认会在结束时删除带 launch token 的临时 dsh 日志。`E2E_KEEP=1` 会保留 `.test-tmp/` 与 `.test-dsh-home/` 便于排障，但**其中的 dsh 日志含 launch token**，排查完请立即删除。
 
-覆盖（27 步）：302 登录跳转 / 401 JSON；CSRF 与安全头；admin bootstrap；QR 指纹与 fragment 票据；配对、单次票据、过期票据；无设备 `device_required`；**已配对设备 + 密码登录（无 TOTP）与 cookie 标志**；device token renew（仅 body，拒绝空 body/cookie 回退）；反代 `/` 含 `__DSH_BOOT__`；上游 Set-Cookie 剥离；WebSocket `/api/remote.mux` 401/101；**登录会话访问 `/__admin` 200（账号/配对/设备/会话/审计区块、配对区 6 位动态验证码输入框、无 pair-current-password）、无会话 302**；会话 POST 无 CSRF 403；**会话通道生成 QR 缺 TOTP 403 `totp_required`、错 TOTP 403 `totp_invalid`、正确 200、同一 TOTP 窗口连续两次 200**，随后配对浏览器设备、吊销后 token renew 401；登出；5 次错误密码 429；吊销设备；**会话通道改密/重置 TOTP 强制 currentPassword，成功后设备/会话清空；改密后新密码直接登录（无 TOTP），新 session 用新 TOTP 签发 QR，旧 TOTP secret 与缺失码 403**；开放重定向防护；审计与日志不含秘密；文件 0600；**第 19/20 步（v0.5.0）**：全新 `stateDir` 实例上未初始化 `/__admin` 200 向导（DENY/no-store/CSP nonce）、status 不回显 token、错 token 403、adminKey 轮换 token 且旧 token 403、begin 返回 QR/secret、错 TOTP 403 且仍未初始化、正确 confirm 200 + `dsh_gate_device` cookie + 用户/TOTP 已确认 + web 设备 + `setup.token` 删除；初始化后 begin/confirm/token-rotate 409、密码登录 200、会话 `/__admin` 200、匿名 302、审计含 setup 事件且无秘密；**第 21~23 步（v0.6.0）**：`GET /__admin/api/network` 初始 config/规则、服务端页与 `?embed=1` 含网络设置区块、session 改 publicUrl 缺/错 TOTP 403 + 非法 origin 400 不落盘、正确 TOTP 200 + 源码 `network.json` 0600 + `POST /qr` 的 URL 使用 `https://relay.example:8443`、adminKey 恢复；adminKey 热重建 3458→3459→3458（响应 `rebound:true`、旧端口关闭、新端口 `/__auth/login` 200、新端口会话 `/__admin` 200、network.json 持久化、无需重启）；通配监听地址/等上游端口/http 与 TLS 不匹配均 400、network.json 与监听不变、审计含 `network_update`、`network_invalid_*` 且不含 TOTP secret；**第 24 步（v0.6.1）**：损坏 `network.json` 的 standalone 继续启动、日志含 `IGNORED`/`rm -f`/`not valid JSON`、网络 API 返回 `source=config` 且监听 bundle 端口；**第 25 步（v0.6.2）**：`GET network` 返回空 `publicFingerprint` 且 `effectiveFingerprint` 等于网关证书、服务端页/`?embed=1` 含新输入框与自动读取按钮、非法指纹 400（带 `field`）、session 写指纹无 TOTP 403、固定值（大写输入归一）写入 `network.json` 并驱动 QR `fp=`、`"auto"` 对该测试实例 TLS 握手读出证书指纹并落盘/驱动 QR、关闭端口探测失败 400 `fingerprint_fetch_failed` 且不改 publicUrl/指纹、清空后 QR 回退网关证书、审计含 `public_fp=<前8位>` 与失败记录且不含完整指纹、TOTP secret 不落盘；第 2/23 步另覆盖 loopback 监听 403 + admin-key 不泄露、`127.0.0.1`/`::1` 与 IPv6 通配 400、持久化失败先绑后关回滚。 **第 26/27 步（v0.7.1）**：注入时钟下已认证 API/HTML 刷新响应为 `private, no-store` + `Vary: cookie`、public asset 即使刷新到期也不改会话且无 `Set-Cookie`、旧设备越过绝对上限后 session 未认证/renew 401 且设备被删除；真实网关上登录页（CSRF cookie）/登录/renew 响应头满足同一契约，带有效会话 cookie 的 public asset 不要求登录且不返回 `Set-Cookie`。
+覆盖（29 步）：302 登录跳转 / 401 JSON；CSRF 与安全头；admin bootstrap；QR 指纹与 fragment 票据；配对、单次票据、过期票据；无设备 `device_required`；**已配对设备 + 密码登录（无 TOTP）与 cookie 标志**；device token renew（仅 body，拒绝空 body/cookie 回退）；反代 `/` 含 `__DSH_BOOT__`；上游 Set-Cookie 剥离；WebSocket `/api/remote.mux` 401/101；**登录会话访问 `/__admin` 200（账号/配对/设备/会话/审计区块、配对区 6 位动态验证码输入框、无 pair-current-password）、无会话 302**；会话 POST 无 CSRF 403；**会话通道生成 QR 缺 TOTP 403 `totp_required`、错 TOTP 403 `totp_invalid`、正确 200、同一 TOTP 窗口连续两次 200**，随后配对浏览器设备、吊销后 token renew 401；登出；5 次错误密码 429；吊销设备；**会话通道改密/重置 TOTP 强制 currentPassword，成功后设备/会话清空；改密后新密码直接登录（无 TOTP），新 session 用新 TOTP 签发 QR，旧 TOTP secret 与缺失码 403**；开放重定向防护；审计与日志不含秘密；文件 0600；**第 19/20 步（v0.5.0）**：全新 `stateDir` 实例上未初始化 `/__admin` 200 向导（DENY/no-store/CSP nonce）、status 不回显 token、错 token 403、adminKey 轮换 token 且旧 token 403、begin 返回 QR/secret、错 TOTP 403 且仍未初始化、正确 confirm 200 + `dsh_gate_device` cookie + 用户/TOTP 已确认 + web 设备 + `setup.token` 删除；初始化后 begin/confirm/token-rotate 409、密码登录 200、会话 `/__admin` 200、匿名 302、审计含 setup 事件且无秘密；**第 21~23 步（v0.6.0）**：`GET /__admin/api/network` 初始 config/规则、服务端页与 `?embed=1` 含网络设置区块、session 改 publicUrl 缺/错 TOTP 403 + 非法 origin 400 不落盘、正确 TOTP 200 + 源码 `network.json` 0600 + `POST /qr` 的 URL 使用 `https://relay.example:8443`、adminKey 恢复；adminKey 热重建 3458→3459→3458（响应 `rebound:true`、旧端口关闭、新端口 `/__auth/login` 200、新端口会话 `/__admin` 200、network.json 持久化、无需重启）；通配监听地址/等上游端口/http 与 TLS 不匹配均 400、network.json 与监听不变、审计含 `network_update`、`network_invalid_*` 且不含 TOTP secret；**第 24 步（v0.6.1）**：损坏 `network.json` 的 standalone 继续启动、日志含 `IGNORED`/`rm -f`/`not valid JSON`、网络 API 返回 `source=config` 且监听 bundle 端口；**第 25 步（v0.6.2）**：`GET network` 返回空 `publicFingerprint` 且 `effectiveFingerprint` 等于网关证书、服务端页/`?embed=1` 含新输入框与自动读取按钮、非法指纹 400（带 `field`）、session 写指纹无 TOTP 403、固定值（大写输入归一）写入 `network.json` 并驱动 QR `fp=`、`"auto"` 对该测试实例 TLS 握手读出证书指纹并落盘/驱动 QR、关闭端口探测失败 400 `fingerprint_fetch_failed` 且不改 publicUrl/指纹、清空后 QR 回退网关证书、审计含 `public_fp=<前8位>` 与失败记录且不含完整指纹、TOTP secret 不落盘；第 2/23 步另覆盖 loopback 监听 403 + admin-key 不泄露、`127.0.0.1`/`::1` 与 IPv6 通配 400、持久化失败先绑后关回滚。 **第 26/27 步（v0.7.1）**：注入时钟下已认证 API/HTML 刷新响应为 `private, no-store` + `Vary: cookie`、public asset 即使刷新到期也不改会话且无 `Set-Cookie`、旧设备越过绝对上限后 session 未认证/renew 401 且设备被删除；真实网关上登录页（CSRF cookie）/登录/renew 响应头满足同一契约，带有效会话 cookie 的 public asset 不要求登录且不返回 `Set-Cookie`。 **第 28 步（v0.7.3）**：真实网关上同一 `clientDeviceId` 连续两次 `pair/redeem` → 设备总数不变、`deviceId` 相同、`replaced:false/true`、旧 token renew 401、新 token renew 200、管理 API 的 state 不含 `clientDeviceId`；非法 `clientDeviceId` 返回 400 `invalid_client_device_id` 且不新增设备。**第 29 步（v0.7.3 P1）**：真实网关上并发发起 8 个旧 token 的 renew，并与同 `clientDeviceId` 的重配交错，替换完成后旧 token 全部 401（或先返回 200 但会话已被删除）、该设备 session 数为 0、新 token renew 200。
 
 ## 故障排查
 

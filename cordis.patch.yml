@@ -33,7 +33,7 @@
         sessionAbsoluteTtlDays: 30
         deviceTtlDays: 90
         deviceAbsoluteTtlDays: 365
-        maxDevices: 8
+        maxDevices: 100
         pairTicketTtlSeconds: 120
         loginLock:
           maxFailures: 5
