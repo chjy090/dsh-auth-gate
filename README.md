@@ -1,14 +1,14 @@
 # dsh-pairing-gate
 
-> **改名说明（v0.7.2）**：原名为 `dsh-auth-gate`，因 npm 上该包名已被 [TecFancy/dsh-auth-gate](https://github.com/TecFancy/dsh-auth-gate) 占用而改名；两者功能不同：本插件是**扫码设备配对 + 公网反代 + 管理面板/初始化向导**，后者是密码/共享令牌登录 + 用户管理 CLI。旧仓库链接会 301 跳转到 <https://github.com/chjy090/dsh-pairing-gate>。
+> **包名说明**：npm 包名为 `dsh-pairing-gate`（本地目录名仍为 `dsh-auth-gate`）。原名 `dsh-auth-gate` 已被 [TecFancy/dsh-auth-gate](https://github.com/TecFancy/dsh-auth-gate) 占用，两者功能不同：本插件是**扫码设备配对 + 公网反代 + 管理面板/初始化向导**，后者是密码/共享令牌登录 + 用户管理 CLI。旧仓库链接会 301 跳转到 <https://github.com/chjy090/dsh-pairing-gate>；改名版本的迁移步骤见「从旧名 `dsh-auth-gate` 迁移」与「版本与更新」。
 
 DeepSeek Harness（dsh）的前台认证网关插件：**TOTP 授权的扫码设备配对 + 用户名密码登录**，认证通过后把请求反代到 dsh（含 WebSocket）。
 
-> **路径约定**：下文所有 `$DSH_HOME/auth-gate/...` 都是 dsh 状态目录下的路径；**未设置 `DSH_HOME` 时 `stateDir` 回退到 `~/.dsh/auth-gate`**（v0.7.4 起没有 `DSH_HOME` 也能直接启动，`admin.key`/`state.json`/`setup.token`/`network.json` 都在该目录）。
+> **路径约定**：下文所有 `$DSH_HOME/auth-gate/...` 都是 dsh 状态目录下的路径；**未设置 `DSH_HOME` 时 `stateDir` 回退到 `~/.dsh/auth-gate`**（没有 `DSH_HOME` 也能直接启动，`admin.key`/`state.json`/`setup.token`/`network.json` 都在该目录）。
 
 ## 快速开始
 
-v0.7.4 起仓库默认配置是**可移植的本机 HTTP 默认值**，新机器装完即可启动，不依赖 TLS 证书或本机部署地址。
+仓库默认配置是**可移植的本机 HTTP 默认值**，新机器装完即可启动，不依赖 TLS 证书或本机部署地址。
 
 1. **安装**（`$PLUGIN_DIR` 是插件目录；`dsh plugin add` 会自动注入 `auth-gate`，不要重复写 `insert:`），然后重启 dsh：
 
@@ -35,6 +35,8 @@ v0.7.4 起仓库默认配置是**可移植的本机 HTTP 默认值**，新机器
 
 5. **改配置的位置**是 profile `cordis.patch.yml` 里按 `id: auth-gate` 的 override。Cordis 对 `config` 是**整体替换**，必须写全所有字段（可复制 [`config.example.json`](config.example.json) 修改）；不要直接改插件包内的 `cordis.patch.yml`，升级会覆盖。
 
+> ⚠️ **默认配置只适合本机试用**。生产 / 跨机访问 / App 扫码配对**必须先改配置**：在 profile 的 `- id: auth-gate` override 里配置 LAN `listenHost`、`tlsCert`/`tlsKey` 与 `https://` 的 `publicUrl`（用 Caddy/Nginx 终止对外 TLS 时，网关自身仍要证书、代理须 HTTPS 回源）。详见上方「快速开始」第 3–5 条与 [`docs/installation.md`](docs/installation.md) §2.2.2。
+
 ## 配套仓库
 
 | 仓库 | 说明 |
@@ -42,26 +44,21 @@ v0.7.4 起仓库默认配置是**可移植的本机 HTTP 默认值**，新机器
 | [dsh-pairing-gate](https://github.com/chjy090/dsh-pairing-gate) | 本插件：dsh 服务端设备配对网关（扫码配对 / 会话 / TOTP / 反代） |
 | [DSH-Mobile](https://github.com/chjy090/DSH-Mobile) | Android 客户端：扫码配对、设备令牌自动续期；APK 与更新见 [Releases](https://github.com/chjy090/DSH-Mobile/releases) |
 
-目标部署是「单人自用」。v0.4.0 起认证模型是**设备绑定即第二因素**：
+目标部署是「单人自用」的**设备绑定即第二因素**认证模型：
 
 1. 新设备先在管理页输入 **6 位 TOTP** 生成一次性配对二维码，扫码/打开链接完成绑定（`dsh_gate_device` cookie，默认 90 天）；
 2. 之后这台设备只需 **用户名 + 密码** 登录，不再填写 TOTP；
 3. 改密码 / 重置 TOTP 仍要求**当前密码**（凭证变更的二次确认），重置/改密会撤销全部设备与会话，所有设备重新配对。
 
-v0.5.0 起，全新部署的首次初始化可以完全在浏览器完成：网关启动日志给出一次性初始化链接，打开后按向导创建管理员、绑定 TOTP，并**自动把当前浏览器配对为可信设备**，随后直接用户名 + 密码登录。adminKey/curl 仅保留为自动化或应急通道。
+全新部署的首次初始化可以完全在浏览器完成：网关启动日志给出一次性初始化链接，打开后按向导创建管理员、绑定 TOTP，并**自动把当前浏览器配对为可信设备**，随后直接用户名 + 密码登录。adminKey/curl 仅保留为自动化或应急通道（见「首次初始化」）。
 
-v0.6.0 起，管理页（服务端 `/__admin` 与原生侧边栏「设置」tab）可以修改**监听地址/端口**与**对外访问地址 `publicUrl`**。后者用于生成配对二维码/链接，因此可以填 frp 中转后的公网 IP/域名；改监听地址会**即时重建监听**（无需重启 dsh），失败自动回滚。详见「网络设置 / frp 内网穿透」。
+管理页（服务端 `/__admin` 与原生侧边栏「设置」tab）可以修改**监听地址/端口**、**对外访问地址 `publicUrl`** 与**对外证书指纹 `publicFingerprint`**。`publicUrl` 用于生成配对二维码/链接，可以填 frp 中转后的公网 IP/域名；改监听地址会**即时重建监听**（无需重启 dsh），失败自动回滚；`publicFingerprint` 留空时使用网关自身证书，前置代理终止 TLS 时填代理证书指纹（App 按二维码里的 `fp=` 做 fail-closed pinning）。详见「网络设置 / frp 内网穿透」。
 
-v0.7.0 起，**设备令牌与登录会话都改为「滑动窗口 + 绝对上限」**：App 每次 `POST /__auth/renew` 成功或密码登录成功，都会把设备有效期推进到 `min(now + deviceTtlDays, 配对时间 + deviceAbsoluteTtlDays)`，并重发设备 cookie；Web 会话每次已认证的 HTTP 请求在满足刷新条件时把 `expiresAt` 推进到 `min(now + sessionTtlHours, 创建时间 + sessionAbsoluteTtlDays)`，并重发 `dsh_gate_session`（同一 token，新的 `Max-Age`）。默认 `sessionTtlHours: 48`（空闲窗口）、`sessionAbsoluteTtlDays: 30`、`deviceTtlDays: 90`、`deviceAbsoluteTtlDays: 365`（0 = 无绝对上限）。**吊销设备会级联删除该设备的全部会话并清空待用配对票据**，旧 deviceToken、所有 session cookie 与设备 cookie 在下一次 HTTP 请求立即失效（已建立的 WebSocket 隧道不会因此立即断开，需等连接自然关闭）。
-v0.7.1 是 v0.7.0 的 P2 安全修复（无新功能、配置/state 格式不变）：① 带会话/设备 cookie 的响应统一 `cache-control: private, no-store` + `vary: cookie`，并且 public asset 请求不再刷新会话、不再附带 `Set-Cookie`（防止前置共享缓存缓存并回放他人会话）；② `extendDevice` 及设备读取结果不再返回 `tokenHash`；③ 设备绝对上限改为**所有读路径**立即生效（`findDeviceByToken`/`findDeviceById` 命中 `createdAt + deviceAbsoluteTtlDays <= now` 即删除设备及其全部 session），旧 `state.json` 设备或调低 `deviceAbsoluteTtlDays` 后不再能活到下一次 renew/登录。
+**滑动会话与绝对上限**：设备令牌与登录会话都采用「滑动窗口 + 绝对上限」。App 每次 `POST /__auth/renew` 成功或密码登录成功，都会把设备有效期推进到 `min(now + deviceTtlDays, 配对时间 + deviceAbsoluteTtlDays)` 并重发设备 cookie；Web 会话每次已认证的 HTTP 请求在满足刷新条件时把 `expiresAt` 推进到 `min(now + sessionTtlHours, 创建时间 + sessionAbsoluteTtlDays)`，并重发 `dsh_gate_session`（同一 token，新的 `Max-Age`）。默认 `sessionTtlHours: 48`（空闲窗口）、`sessionAbsoluteTtlDays: 30`、`deviceTtlDays: 90`、`deviceAbsoluteTtlDays: 365`（0 = 无绝对上限）。**吊销设备会级联删除该设备的全部会话并清空待用配对票据**，旧 deviceToken、所有 session cookie 与设备 cookie 在下一次 HTTP 请求立即失效（已建立的 WebSocket 隧道不会因此立即断开，需等连接自然关闭）。设备绝对上限在**所有读路径**立即生效（命中 `createdAt + deviceAbsoluteTtlDays <= now` 即删除设备及其全部 session），旧 `state.json` 设备或调低 `deviceAbsoluteTtlDays` 后也不会活到下一次 renew/登录；设备读取与 `extendDevice` 不返回 `tokenHash`。
 
-v0.7.3 起，`POST /__auth/pair/redeem` 接受可选的 `clientDeviceId`（客户端生成的稳定安装 ID），用于**同一设备重复配对去重**：同一 ID 且旧记录未过期时原地复用 `device.id`、轮换 `deviceToken`（旧 token 立即失效）、删除该设备全部旧会话、把 `createdAt` 重置为本次配对时间（绝对上限重新起算）、清空全部其它待用配对票据，不新增设备也不占新名额、不触发 `device_limit`；响应带 `replaced`（`true`/`false`）并回显 `clientDeviceId`。浏览器配对不传该字段，行为不变；`maxDevices` 默认值从 8 调整为 **100**（范围仍为 1–100）。详见「配对与登录」第 6 条。
+**同一设备重复配对去重**：`POST /__auth/pair/redeem` 接受可选的 `clientDeviceId`（客户端生成的稳定安装 ID）。同一 ID 且旧记录未过期时原地复用 `device.id`、轮换 `deviceToken`（旧 token 立即失效）、删除该设备全部旧会话、把 `createdAt` 重置为本次配对时间（绝对上限重新起算）、清空全部其它待用配对票据，不新增设备也不触发 `device_limit`；响应带 `replaced` 并回显 `clientDeviceId`。浏览器配对不传该字段，行为不变。详见「配对与登录」第 6 条。
 
-v0.7.4 起，仓库默认配置改为**可移植默认值**：`listenHost: 127.0.0.1`、`listenPort: 3443`、`upstream: http://127.0.0.1:3080`，默认不配置 TLS（`publicUrl` 自动推导为 `http://127.0.0.1:3443`），不再写死本机 LAN 地址、TLS 证书绝对路径或 `upstreamInsecureTls`；新用户首装即可在本机启动。新增与默认值一致的 [`config.example.json`](config.example.json) 和首屏「快速开始」。生产/跨机/App 配对仍需在 profile override 中配置 LAN 监听 + `tlsCert`/`tlsKey` + `publicUrl: https://...`；即使对外 TLS 由 Caddy/Nginx 终止，网关自身也必须配置 `tlsCert`/`tlsKey`（自签即可）、由代理以 HTTPS 回源，再配置 `publicUrl`/`publicFingerprint`（App 扫码只接受 https 配对 URL，明文 HTTP 回源时 `publicUrl` 只能是 http，无法配对）；profile override 的 `config` 是整体替换，必须写全。
-
-v0.6.2 起，网络设置新增**对外证书指纹 `publicFingerprint`**：当 TLS 由 frp 后面的反向代理（如 Caddy）终止时，浏览器看到的是代理证书，而 App 会按二维码里的 `fp=` 做 fail-closed pinning。此时把代理证书的 SHA-256 DER 填进该字段（或点「从对外地址自动读取」），二维码就按公网实际证书 pinning，App 可正常配对；留空仍使用网关自身证书。
-
-> **v0.6.1 安全修复（P0）**：管理页/`network.json` 的监听地址**禁止 loopback**（`127.0.0.0/8`、`::1`）；并且当网关实际绑定 loopback 时（例如 v0.7.4 的可移植默认配置）自动禁用「本机 loopback 即管理员」通道（仅保留 adminKey 与会话）。这堵住了「网关监听 127.0.0.1 + frp/本机反代转发」时公网访客被当成本机管理员、直接读取 `/__admin/api/admin-key` 的路径。生产用 frp 时，frpc 的 `local_ip` 必须填网关绑定的同一 LAN 地址。
+> **loopback 安全提示**：管理页/`network.json` 的监听地址**禁止 loopback**（`127.0.0.0/8`、`::1`）；当网关实际绑定 loopback 时（例如默认的本机试用配置），会**自动禁用「本机 loopback 即管理员」通道**（仅保留 adminKey 与会话），并在启动日志打印 WARN。这堵住了「网关监听 127.0.0.1 + frp/本机反代转发」时公网访客被当成本机管理员、直接读取 `/__admin/api/admin-key` 的路径。生产用 frp 时，frpc 的 `local_ip` 必须填网关绑定的同一 LAN 地址。详见「数据与安全」。
 
 未认证的浏览器看不到 dsh 的 launch token，也拿不到 dsh 的会话 cookie。
 
@@ -83,10 +80,10 @@ v0.6.2 起，网络设置新增**对外证书指纹 `publicFingerprint`**：当 
 - 扫码配对：管理页（登录会话通道）必须输入认证器当前的 **6 位 TOTP**；校验只验证、不消耗登录重放计数器，所以同一 30 秒窗口可连续生成多个二维码，实际签发仍按 IP 限 10 次/分钟。一次性票据默认 120 秒、服务端只存 SHA-256；二维码只把票据放在 **URL fragment**，不会发给服务器或日志。
 - 设备管理：默认最多 100 台、默认 90 天；每台设备可单独吊销，吊销立即失效其会话；同一客户端可用 `clientDeviceId` 重复配对，仍只占一条记录。
 - **WebUI 管理页**：登录后打开 `/__admin` 即可管理账号、生成配对二维码/链接、查看设备与会话、吊销设备、重置 TOTP、修改网络设置、查看审计（详见「WebUI 管理页」）。
-- **网络设置（v0.6.0 / v0.6.1 / v0.6.2）**：管理页可修改监听地址/端口、对外地址 `publicUrl` 与对外证书指纹 `publicFingerprint`。`publicUrl` 立刻用于新的配对二维码/链接（frp 场景填中转公网 IP/域名）；`publicFingerprint` 留空表示使用网关自身 TLS 证书，填 64 位 SHA-256（或 POST `"auto"` 自动读取 publicUrl 的证书）后二维码 `fp=` 改用公网实际证书，App 可按代理证书 pinning；监听地址/端口采用**先绑新、后关旧**的热重建（先绑定成功再持久化，失败时旧监听全程可用）；管理页/`network.json` 只接受本机 LAN 地址（拒绝 loopback 与通配地址，loopback 仅用于 bundle 默认的本机首装）；覆盖值持久化到 `$DSH_HOME/auth-gate/network.json`（0600），重启后仍生效。
-- **原生侧边栏管理面板（v0.3.0）**：dsh 左侧栏「全局面板」的「认证管理」入口改为 **React + dsh 设计系统** 原生面板（不再用 iframe）：顶部状态、配对二维码/倒计时/复制、改密、重置 TOTP、设备/会话表格、最近 100 条审计；20 秒轮询（页面隐藏时暂停）、CSRF 双提交、429 倒计时、未登录/会话失效跳转登录。从 3080 直连时只显示跳转 3443 的说明卡，不发 API 请求。
+- **网络设置**：管理页可修改监听地址/端口、对外地址 `publicUrl` 与对外证书指纹 `publicFingerprint`。`publicUrl` 立刻用于新的配对二维码/链接（frp 场景填中转公网 IP/域名）；`publicFingerprint` 留空表示使用网关自身 TLS 证书，填 64 位 SHA-256（或 POST `"auto"` 自动读取 publicUrl 的证书）后二维码 `fp=` 改用公网实际证书，App 可按代理证书 pinning；监听地址/端口采用**先绑新、后关旧**的热重建（先绑定成功再持久化，失败时旧监听全程可用）；管理页/`network.json` 只接受本机 LAN 地址（拒绝 loopback 与通配地址，loopback 仅用于 bundle 默认的本机首装）；覆盖值持久化到 `$DSH_HOME/auth-gate/network.json`（0600），重启后仍生效。
+- **原生侧边栏管理面板**：dsh 左侧栏「全局面板」的「认证管理」入口改为 **React + dsh 设计系统** 原生面板（不再用 iframe）：顶部状态、配对二维码/倒计时/复制、改密、重置 TOTP、设备/会话表格、最近 100 条审计；20 秒轮询（页面隐藏时暂停）、CSRF 双提交、429 倒计时、未登录/会话失效跳转登录。从 3080 直连时只显示跳转 3443 的说明卡，不发 API 请求。
 - 反代：HTTP(S) 与 WebSocket；Host/Origin 改写、入站 Cookie 删除、注入 dsh 会话 cookie、上游 `Set-Cookie` 剥离、上游 401 自动刷新 cookie 重试一次、Location 改写。
-- 会话：空闲窗口 48 小时 + 绝对上限 30 天（v0.7.0 起滑动续期）；服务端只存 token 的 SHA-256；登出、吊销设备会撤销对应会话（吊销设备级联撤销该设备全部会话）；**改密/重置 TOTP 会撤销全部会话与全部已配对设备**（需重新扫码）。
+- 会话：空闲窗口 48 小时 + 绝对上限 30 天（滑动续期）；服务端只存 token 的 SHA-256；登出、吊销设备会撤销对应会话（吊销设备级联撤销该设备全部会话）；**改密/重置 TOTP 会撤销全部会话与全部已配对设备**（需重新扫码）。
 - 限流：同一 IP+用户名 15 分钟内 5 次失败锁 15 分钟；配对/续期按 IP 30 次/分钟；QR 签发按 IP 10 次/分钟；会话通道的 `currentPassword`（改密/重置 TOTP）与配对 TOTP 校验各自按 IP 计数，5 次失败锁 5 分钟（成功一次即清零）。
 - 审计：最近 500 条（管理 API 返回最近 100 条），只记录粗粒度原因，不写密码/TOTP/票据/设备 token。
 - 状态文件 `0600`、原子写、互斥；损坏时拒绝启动而不是静默重置；管理密钥独立 `0600` 文件，首启生成，日志只输出掩码与文件路径（不打印完整密钥）。
@@ -182,7 +179,7 @@ dsh-auth-gate/              # 本地目录名保持不变；npm 包名为 dsh-pa
 
 6. 查看启动日志里的初始化链接（未初始化时才会有）：`journalctl -u dsh -n 100 --no-pager | grep 'setup required'`，然后按下一节的 WebUI 向导完成首次初始化。已初始化的生产实例升级后不会出现该链接。
 
-> v0.6.0 起可直接在管理页修改 `listenHost`/端口与 `publicUrl`（即时生效、无需重启）；bundle config 只是可移植的首次部署默认值（loopback 明文 HTTP），生产入口必须通过 profile override 或 `network.json` 配置 LAN/TLS。换端口后记得同步防火墙与 frp 的 `local_port`。v0.6.2 起同一页面还可设置 `publicFingerprint`（详见「网络设置 / frp 内网穿透」）。
+> 可直接在管理页修改 `listenHost`/端口与 `publicUrl`（即时生效、无需重启）；bundle config 只是可移植的首次部署默认值（loopback 明文 HTTP），生产入口必须通过 profile override 或 `network.json` 配置 LAN/TLS。换端口后记得同步防火墙与 frp 的 `local_port`。同一页面还可设置 `publicFingerprint`（详见「网络设置 / frp 内网穿透」）。
 
 ### 卸载
 
@@ -195,7 +192,7 @@ systemctl restart dsh
 
 ### 从旧名 `dsh-auth-gate` 迁移
 
-v0.7.2 只改包名（仓库改为 [dsh-pairing-gate](https://github.com/chjy090/dsh-pairing-gate)，本地目录名仍是 `dsh-auth-gate`）。已以旧名安装的用户按下面三步迁移，**`state.json`、账号、TOTP、已配对设备、会话与 `network.json` 都不受影响**：
+包名已改为 [dsh-pairing-gate](https://github.com/chjy090/dsh-pairing-gate)（本地目录名仍是 `dsh-auth-gate`）。已以旧名安装的用户按下面三步迁移，**`state.json`、账号、TOTP、已配对设备、会话与 `network.json` 都不受影响**：
 
 ```bash
 # 1) 移除旧名（会同时移除 dependency 与 bundles 条目）
@@ -210,7 +207,7 @@ systemctl restart dsh
 
 迁移后 `$DSH_HOME/profiles/web/package.json` 的 dependency 键与 `dsh.profile.bundles` 都应为 `dsh-pairing-gate`（见 [docs/installation.md](docs/installation.md) 2.7.1）。若 profile 的 `cordis.patch.yml` 里还留着 `- id: auth-gate` 覆盖段，把其中的 `name:` 也改成 `dsh-pairing-gate`。
 
-## 首次初始化（WebUI 向导，v0.5.0）
+## 首次初始化（WebUI 向导）
 
 全新部署（`stateDir` 里还没有用户）**不需要 SSH 或 curl**：启动网关后，从服务器日志取出一次性初始化链接，在浏览器里按向导完成「创建管理员 + 绑定 TOTP + 自动配对当前浏览器」，随后即可用用户名 + 密码登录。
 
@@ -233,7 +230,7 @@ auth-gate: setup required — open <publicUrl>/__admin#setup=<64位hex>（默认
 4. **绑定 TOTP**：用认证器（Aegis/1Password/Google Authenticator 等）扫码或手输密钥，输入当前 6 位动态验证码。页面调用 `POST /__admin/api/setup/confirm`，服务端原子完成：创建用户 → 标记 TOTP 已确认 → 创建名为「初始化浏览器」的 `web` 设备 → 下发 `dsh_gate_device` cookie（90 天）→ 删除 `setup.token`。
 5. 自动跳转 `/__auth/login`，**只需用户名 + 密码**登录；当前浏览器已配对，不再需要扫码。
 
-> 生产实例已经初始化，升级到 v0.5.0 后不会出现向导：`/__admin` 仍按原逻辑 302 到登录页。要看到向导必须全新部署（空 stateDir），或先完整卸载/清空 `$DSH_HOME/auth-gate`（会丢失账号与全部已配对设备，谨慎操作）。
+> 已初始化的实例升级后不会出现向导：`/__admin` 仍按原逻辑 302 到登录页。要看到向导必须全新部署（空 stateDir），或先完整卸载/清空 `$DSH_HOME/auth-gate`（会丢失账号与全部已配对设备，谨慎操作）。
 
 ### 令牌生命周期、重置与关闭
 
@@ -276,7 +273,7 @@ https://192.0.2.10:3443/__admin
 
 未登录的 HTML 访问会 `302` 到 `/__auth/login?next=/__admin`，登录后自动回到管理页（不是 403 死页）。
 
-### 原生侧边栏管理面板（v0.3.0）
+### 原生侧边栏管理面板
 
 `dsh-pairing-gate` 同时是一个 dsh **client 插件**：`package.json` 通过 `exports["./client"]` 暴露 `lib/client.js`，并声明
 
@@ -301,7 +298,7 @@ dsh 启动时扫描 loader 条目，把 client bundle 组合进 `/plugins/...` �
 - **账号**：修改密码（当前密码 + 新密码 + 确认）、重置 TOTP（内联二次确认）；成功后展示新 TOTP QR/secret **仅一次**，并提示重新登录。
 - **设备**：名称/ID、平台标签、在线、当前设备、创建/最近活跃/到期、吊销（二次确认后 POST 并刷新）。
 - **会话**：设备、创建/最近活跃/到期、当前会话标记。
-- **设置**（v0.6.0，v0.6.2 起含证书指纹）：只读展示 TLS 状态、生效来源（运行时覆盖/插件配置）、当前监听、publicUrl 与**二维码当前生效指纹**；修改监听地址、端口、对外访问地址（publicUrl）与对外证书指纹（`publicFingerprint`，含「从对外地址自动读取」按钮），会话通道需 6 位动态验证码 + 内联二次确认；保存成功 toast，监听重建时提示连接会短暂中断并需刷新；未设置指纹但对外主机与监听地址不同时显示 `fingerprintHint` 风险提示。
+- **设置**：只读展示 TLS 状态、生效来源（运行时覆盖/插件配置）、当前监听、publicUrl 与**二维码当前生效指纹**；修改监听地址、端口、对外访问地址（publicUrl）与对外证书指纹（`publicFingerprint`，含「从对外地址自动读取」按钮），会话通道需 6 位动态验证码 + 内联二次确认；保存成功 toast，监听重建时提示连接会短暂中断并需刷新；未设置指纹但对外主机与监听地址不同时显示 `fingerprintHint` 风险提示。
 - **审计**：最近 100 条（时间/类型/IP/设备/详情），倒序，滚动容器 + 手动刷新。
 
 渲染与交互：
@@ -311,7 +308,7 @@ dsh 启动时扫描 loader 条目，把 client bundle 组合进 `/plugins/...` �
   全部用 `React.createElement`，不使用 JSX。
 - 实际使用 `Button`、`Input`、`SegmentedControl`、`SegmentedTabs`、`Tag`、`writeClipboard` 和若干 `Icon*`；
   若 primitives 不可用会退化为本地极简控件，侧边栏条目不会整体消失。
-- v0.4.2 起整个面板包在 `PanelErrorBoundary` 中：渲染异常不再把 React 树卸载成空白，而是显示
+- 整个面板包在 `PanelErrorBoundary` 中：渲染异常不再把 React 树卸载成空白，而是显示
   「认证管理渲染失败」卡（`error.message` + 栈前 1500 字符）并打印 `[auth-gate] render failed`。
   每个 primitives 组件（含图标）单独 guard，单个设计系统组件抛错只退化该控件。
 - 调试：地址加 `?authgate-debug=1`（或 hash `#authgate-debug`）会显示固定调试卡，含 `location.href/port`、
@@ -327,7 +324,7 @@ dsh 启动时扫描 loader 条目，把 client bundle 组合进 `/plugins/...` �
 
 - 挂载时**先请求公开的 `GET /__admin/api/setup/status`**：`configured:false` 时只渲染「网关尚未初始化」卡片（提示打开 `<gatewayOrigin>/__admin`，初始化链接在启动日志/`setup.token`），**不再请求 CSRF/whoami/state，也不显示登录 CTA**；`configured:true` 后才继续 `GET /__auth/csrf` → `GET /__auth/whoami`。所有请求 `credentials:"same-origin"`、`cache:"no-store"`，POST 带 `x-auth-gate-csrf`。`csrf_invalid` 只刷新一次 token 并重试一次。
 - 未登录：先探测一次 `/__admin/api/state`；浏览器面板没有 adminKey，因此 loopback 监听时固定 403（显示「未登录 + 去登录」），
-  `next` 为当前 `pathname+search`，整页跳 `/__auth/login`，**不循环重试**。旧版本依赖本机 loopback 通道显示「本机通道」的行为在 v0.6.1 已随 P0 修复移除。
+  `next` 为当前 `pathname+search`，整页跳 `/__auth/login`，**不循环重试**。网关监听 loopback 时本机自动管理通道禁用，面板固定显示「未登录 + 去登录」。
 - 会话失效：401 或 403 `forbidden`/`not_configured` → 停止轮询并显示「会话已失效 + 重新登录」；
   403 `invalid_current_password` 只在表单内提示，不误判掉线。
 - 429：读取 `retry-after` 显示剩余秒数并禁用操作；到期自动恢复。
@@ -338,7 +335,7 @@ dsh 启动时扫描 loader 条目，把 client bundle 组合进 `/plugins/...` �
 兼容与生效：
 
 - `/__admin`（含 `?embed=1`、nonce 内联脚本、`frame-ancestors 'self'`）**保留不动**，作为浏览器直连/旧版本兜底；
-  未初始化时该路径改为公开的 WebUI 初始化向导（`DENY` 不可 frame），初始化完成后恢复 302/登录页行为；v0.3.0 的侧边栏不再使用它。
+  未初始化时该路径改为公开的 WebUI 初始化向导（`DENY` 不可 frame），初始化完成后恢复 302/登录页行为；原生侧边栏不再使用它。
 - **卸载/恢复**：卸载插件（或让 profile 不加载 `auth-gate` 行）并重启 dsh 后，侧边栏条目随 client bundle 一起消失，
   管理页仍可通过 `https://<host>:3443/__admin` 直接访问。
 - **生效方式**：client half 在 dsh 启动时组合，新增/修改后需要重启 dsh（`systemctl restart dsh`）并硬刷新浏览器以丢弃旧 bundle 缓存；**不需要重新 `dsh plugin add`**。
@@ -373,7 +370,7 @@ dsh 启动时扫描 loader 条目，把 client bundle 组合进 `/plugins/...` �
 - 配对 TOTP 校验**只验证不消费**登录重放计数器：同一 30 秒窗口可反复生成二维码，但真实签发仍受 10 次/分钟限制，且失败会进入独立的 TOTP 限流。
 - 改密/重置 TOTP 是整信任面的重置：服务端清空全部设备与 session，返回 `{devicesRevoked, sessionsRevoked, rePairRequired:true}`。所有手机/浏览器必须重新扫码配对后再登录。当前管理页会显示提示并在改密后引导回登录页。
 
-> **认证模型与风险（v0.4.0 语义，v0.4.1 文案修正）**：TOTP 只在**设备配对**时验证，设备绑定成功后该设备上「密码正确即可登录」。因此：
+> **认证模型与风险**：TOTP 只在**设备配对**时验证，设备绑定成功后该设备上「密码正确即可登录」。因此：
 > - **密码泄露 + 已配对设备** = 可直接登录（设备丢失或被他人拿到时尤其危险）。请给设备本身设置锁屏，设备丢失/转手时立即在管理页吊销该设备；怀疑密码泄露时改密（会撤销全部设备与会话，强制重新配对）。
 > - **TOTP 泄露但设备未配对** = 仍不能登录，只可能被用来生成新的配对二维码（还需要一个有效管理会话或 adminKey）。发现 TOTP 异常时应重置 TOTP 并吊销设备。
 > - **会话 cookie 泄露** ≈ 管理能力泄露（可看设备/会话/审计、吊销设备；生成配对码另需 TOTP，改密/重置 TOTP 另需当前密码）。设备吊销时也会清空所有待用配对票据。
@@ -394,15 +391,15 @@ curl -k -X POST -H "x-auth-gate-admin-key: $ADMIN" -H 'content-type: application
   -d '{"password":"新的至少十位密码"}' "$BASE/__admin/api/user"
 ```
 
-adminKey 是 bearer 凭据：不要写进 URL、日志或 shell 历史；轮换方式见「日常运维」。v0.6.1 起 `/__admin/api/admin-key` 不再向 loopback 访客返回密钥（监听 loopback 时整条 loopback 通道禁用），请直接从 `$DSH_HOME/auth-gate/admin.key` 读取。
+adminKey 是 bearer 凭据：不要写进 URL、日志或 shell 历史；轮换方式见「日常运维」。`/__admin/api/admin-key` 不再向 loopback 访客返回密钥（监听 loopback 时整条 loopback 通道禁用），请直接从 `$DSH_HOME/auth-gate/admin.key` 读取。
 
 ## 网络设置 / frp 内网穿透
 
-v0.6.0 起，`/__admin` 页面与原生侧边栏「认证管理 → 设置」tab 都可以修改：
+`/__admin` 页面与原生侧边栏「认证管理 → 设置」tab 都可以修改：
 
 - **监听地址/端口**（`listenHost` / `listenPort`）：网关实际绑定的本机网卡地址与端口；保存后**立即重建监听**，无需重启 dsh。
 - **对外访问地址**（`publicUrl`）：只用于生成配对二维码/链接（以及 `setup.token` 链接等），必须是纯 origin；frp 场景填中转后的公网 IP/域名。二维码**不会**使用监听地址。
-- **对外证书指纹**（`publicFingerprint`，v0.6.2）：配对二维码 `fp=` 使用的证书 DER SHA-256。留空（默认）＝网关自身 TLS 证书；TLS 在 frp/反向代理（Caddy、nginx 等）处终止时填代理证书指纹，否则 App 会按网关自签证书 pinning 并拒绝连接。输入 64 位十六进制（大小写自动归一），或点「从对外地址自动读取」由服务端探测当前 `publicUrl` 的证书。**证书续期后必须重新读取/更新**。
+- **对外证书指纹**（`publicFingerprint`）：配对二维码 `fp=` 使用的证书 DER SHA-256。留空（默认）＝网关自身 TLS 证书；TLS 在 frp/反向代理（Caddy、nginx 等）处终止时填代理证书指纹，否则 App 会按网关自签证书 pinning 并拒绝连接。输入 64 位十六进制（大小写自动归一），或点「从对外地址自动读取」由服务端探测当前 `publicUrl` 的证书。**证书续期后必须重新读取/更新**。
 
 ### 优先级与持久化
 
@@ -426,7 +423,7 @@ v0.6.0 起，`/__admin` 页面与原生侧边栏「认证管理 → 设置」tab
 - 删除该文件并重启 dsh 即可回退到 bundle config；**不要**在网关运行时只删文件，否则内存值与重启后不一致。
 - 文件损坏或写入非法值（如 loopback/通配监听地址、与 dsh 上游端口相同、`publicUrl` 带路径、协议与 TLS 状态不符、`publicFingerprint` 不是 64 位 hex 或是 `auto`）时，**不会静默失败**：启动日志会打印醒目错误与恢复指引（`rm -f $DSH_HOME/auth-gate/network.json` 后重启），并回退到 bundle config 继续启动（UI 显示 `source=config`）。修复/删除该文件前，运行时覆盖一直被忽略。
 - 校验规则：监听地址必须是本机 LAN 网卡的具体 IPv4/IPv6 字面量；**禁止 loopback（`127.0.0.0/8`、`::1`、`::ffff:127.0.0.1`）**，返回 400 `listen_host_loopback_not_allowed`；禁止所有通配写法（`0.0.0.0`、`::`、`::0`、`0::0`、`00::`、`::ffff:0.0.0.0` 等，`server.address()` 也会二次校验），返回 400 `invalid_listen_host`；端口 1–65535 且不能等于 dsh 上游端口（当前 3080）；`publicUrl` 只能是 `http(s)://host[:port]`，不能带路径/查询/片段/凭据；TLS 已配置时必须 `https:`，未配置时必须 `http:`；`publicFingerprint` 只能是空串或 64 位十六进制 SHA-256（`auto` 仅 POST 时可用，且不会被持久化）。
-- **为什么禁止 loopback**：网关的「loopback 即本机管理员」信任模型只能区分 TCP 对端地址。若网关监听 `127.0.0.1` 而 frpc（或本机 nginx）从 loopback 转发，所有公网访客在网关看来都是 `127.0.0.1`；frp TCP 访客还能自带 `Host: 127.0.0.1:3443`，从而免 TOTP/会话读取管理 API（v0.6.0 的 P0）。v0.6.1 双重修复：① 网络设置/`network.json` 拒绝 loopback；② 即使有人手工把 bundle config 改成 loopback，启动后也会**自动禁用 loopback 管理通道**并打印 WARN，只保留 adminKey 与会话，`/__admin/api/admin-key` 不再对 loopback 返回密钥。
+- **为什么禁止 loopback**：网关的「loopback 即本机管理员」信任模型只能区分 TCP 对端地址。若网关监听 `127.0.0.1` 而 frpc（或本机 nginx）从 loopback 转发，所有公网访客在网关看来都是 `127.0.0.1`；frp TCP 访客还能自带 `Host: 127.0.0.1:3443`，从而免 TOTP/会话读取管理 API。网关的双重防护：① 网络设置/`network.json` 拒绝 loopback；② 即使有人手工把 bundle config 改成 loopback，启动后也会**自动禁用 loopback 管理通道**并打印 WARN，只保留 adminKey 与会话，`/__admin/api/admin-key` 不再对 loopback 返回密钥。
 
 ### 管理 API
 
@@ -454,7 +451,7 @@ curl -k -X POST -H "x-auth-gate-admin-key: $ADMIN" -H 'content-type: application
   -d '{"listenPort":3443}' "$BASE/__admin/api/network"
 ```
 
-- 通过**登录会话**（WebUI）调用 `POST /__admin/api/network` 时必须带 6 位动态验证码（`totp`）：缺失 403 `totp_required`、错误 403 `totp_invalid`，失败 5 次锁 5 分钟（独立于配对 TOTP 的计数器）。adminKey 通道免 TOTP/CSRF；`loopback` 通道在 v0.6.1 起仅在网关监听非 loopback 地址时存在。
+- 通过**登录会话**（WebUI）调用 `POST /__admin/api/network` 时必须带 6 位动态验证码（`totp`）：缺失 403 `totp_required`、错误 403 `totp_invalid`，失败 5 次锁 5 分钟（独立于配对 TOTP 的计数器）。adminKey 通道免 TOTP/CSRF；`loopback` 通道仅在网关监听非 loopback 地址时存在。
 - 字段错误：400 `invalid_listen_host` / `invalid_listen_port` / `invalid_public_url` / `invalid_public_fingerprint`，响应带 `field` 与粗粒度 `reason`；重建失败 400 `rebind_failed`（`reason=address_in_use|address_not_available|permission_denied|listen_failed` 等），网关已回滚到旧地址；`"auto"` 探测失败 400 `fingerprint_fetch_failed`（`reason=not_https|timeout|connection_refused|dns_failed|unreachable|certificate_failed|…`），**不修改任何状态**。
 - 自动探测只连接**当前提交/已保存的 `publicUrl`** 的主机与端口（默认 443），使用 `node:tls`，5 秒超时，`rejectUnauthorized:false`（自签代理也合法），读取 leaf 证书 DER 后算 SHA-256；不发送任何 HTTP 请求。调用方无法指定探测目标，因此不会变成任意地址的 SSRF/TLS 扫描器。
 - 成功写审计 `admin_change` / `detail=network_update; listen=…; public=…; public_fp=<前 8 位或 self>; rebound=…; via=…`，不记录 TOTP；探测失败写 `admin_denied / fingerprint_fetch_failed`。
@@ -478,7 +475,7 @@ remote_port = 23443
 `https://203.0.113.10:23443/__auth/pair#v=1&t=…&fp=…`，App 会先比对 `fp`（证书 DER SHA-256）再连接，因此**即使证书 SAN 不含中转 IP，App 仍可正常连接**。
 
 - 浏览器直接访问 `https://203.0.113.10:23443` 时会因证书 SAN 不含该 IP 而告警：可手动接受例外（仅建议临时使用），或重签一张包含该 IP/域名的证书。
-- **监听地址与 `local_ip` 都必须是同一个 LAN 网卡地址（如 `172.16.180.14`），绝不能写 `127.0.0.1`。** 网关的 `loopback` 管理通道按 TCP 对端地址判定：若 frpc 从 loopback 转发，所有公网访客都会被当成“本机管理员”，`/__admin` 及管理 API 将可被未登录访问。v0.6.1 起管理页/`network.json` 直接拒绝 loopback 监听；若通过 bundle config 手工设成 loopback，网关会禁用本机自动管理通道并 WARN，但仍建议立即改成 LAN 地址，因为 loopback 监听本身无法区分本机用户与代理转发。
+- **监听地址与 `local_ip` 都必须是同一个 LAN 网卡地址（如 `172.16.180.14`），绝不能写 `127.0.0.1`。** 网关的 `loopback` 管理通道按 TCP 对端地址判定：若 frpc 从 loopback 转发，所有公网访客都会被当成“本机管理员”，`/__admin` 及管理 API 将可被未登录访问。管理页/`network.json` 直接拒绝 loopback 监听；若通过 bundle config 手工设成 loopback，网关会禁用本机自动管理通道并 WARN，但仍建议立即改成 LAN 地址，因为 loopback 监听本身无法区分本机用户与代理转发。
 - frpc 所在主机的地址会成为所有外部访客在网关侧看到的来源 IP，按 IP 的限流（登录/配对/QR）会被共享；登录本身仍需要已配对设备 + 密码，会话通道仍受 CSRF/TOTP/当前密码保护。
 - 防火墙只需在 frps 放行 `remote_port`；网关的 3443 与 dsh 的 3080 保持私有。
 
@@ -488,7 +485,7 @@ remote_port = 23443
 
 **不支持的做法（frps 终止 TLS + 明文回源）**：`type = https` + `custom_domains` + `vhostHTTPSPort` 会在 frps 用 frps 的证书终止 TLS，再以明文 HTTP 转发给网关。当前版本的配置校验要求「网关没配 TLS ⇒ `publicUrl` 必须 http；配了 TLS ⇒ 必须 https」，而二维码又直接使用 `publicUrl`；同时前置代理会破坏 loopback 管理信任模型并让源 IP 全部变成代理地址。因此**不要**用 frps 终止 TLS + 明文回源的组合；请使用上面的 TLS 直通（TCP）方式，或下面的「反向代理终止 TLS + HTTPS 回源」（注意「HTTPS 回源」不等于网关可以不要证书：下面方案里网关仍配置自签 `tlsCert`/`tlsKey`，否则 https 的 `publicUrl` 会被配置校验直接拒绝）。
 
-#### ③ frp + TLS 终止反向代理（Caddy / nginx，v0.6.2）
+#### ③ frp + TLS 终止反向代理（Caddy / nginx）
 
 典型拓扑：本机网关 `https://172.16.180.14:3443`（自签证书）→ frpc `localPort=3443 → remotePort=18080` → VPS frps 只监听 `127.0.0.1:18080` → VPS 上的 Caddy 用 **Let's Encrypt 有效证书**提供 `https://de12.de5.net:8443`，再以 HTTPS 反代到 `https://127.0.0.1:18080`（`tls_insecure_skip_verify`，因为回源的是网关自签证书）。公网用户看到的是 **Caddy 的证书**，网关自己的证书从不出现在公网，因此：
 
@@ -534,7 +531,7 @@ de12.de5.net:8443 {
 1. 管理页点「生成配对二维码」（或 `POST /__admin/api/qr`；**会话通道需在 body 带 `totp`（6 位动态验证码）**，adminKey 免）。返回的 `url` 形如
    `https://192.0.2.10:3443/__auth/pair#v=1&t=<ticket>&fp=<证书DER SHA256>&n=<主机名>`。
    票据只存在 fragment，服务端日志不会出现；TOTP/当前密码都不会进入 URL，也不会写入审计。
-2. 手机 App（[DSH Mobile](https://github.com/chjy090/DSH-Mobile)，当前 v0.4.6）扫码后比对 `fp` 与证书 SHA-256，然后 `POST /__auth/pair/redeem`
+2. 手机 App（[DSH Mobile](https://github.com/chjy090/DSH-Mobile)）扫码后比对 `fp` 与证书 SHA-256，然后 `POST /__auth/pair/redeem`
    换取 `deviceToken`，同时拿到 `HttpOnly; Secure; SameSite=Lax` 的设备 cookie（初始 `min(now+90 天, now+365 天)`，之后随 renew/登录滑动，绝对上限从配对时起算）。App 建议在 body 里带稳定的 `clientDeviceId`（见第 6 条），这样重装/重新扫码不会堆出重复设备记录。
 3. 打开网关地址：没有会话时 302 到 `/__auth/login?next=…`；输入**用户名 + 密码**（已配对设备无需 TOTP）。
    没有设备 cookie 时登录固定返回 `device_required`（先扫码配对）。
@@ -542,7 +539,7 @@ de12.de5.net:8443 {
 5. App 侧会话过期时用设备 token `POST /__auth/renew`（**只接受 JSON body 的 `deviceToken`**）换新会话，无需重新扫码；
    成功时设备有效期同时滑动，响应带 `deviceExpiresAt` 并重发设备 cookie（`Max-Age` 为新的剩余时长）。
    为防 CSRF/免密续期被跨站利用，不再接受“无 body 时回退 `dsh_gate_device` cookie”的旧路径。
-6. **同一设备重复配对（v0.7.3）**：`POST /__auth/pair/redeem` 的 JSON body 可带可选 `clientDeviceId`（合法格式 `^[A-Za-z0-9._-]{8,64}$`，例如 App 首次启动生成的安装 ID；浏览器配对不传，行为不变）。若该字段合法、且存在**未过期**（`expiresAt > now`）的同 ID 设备：
+6. **同一设备重复配对**：`POST /__auth/pair/redeem` 的 JSON body 可带可选 `clientDeviceId`（合法格式 `^[A-Za-z0-9._-]{8,64}$`，例如 App 首次启动生成的安装 ID；浏览器配对不传，行为不变）。若该字段合法、且存在**未过期**（`expiresAt > now`）的同 ID 设备：
    - **原地复用同一 `device.id`**，更新 `name`/`platform`/`origin`/`lastSeenAt`；
    - **轮换 `deviceToken`**：旧 `tokenHash` 立即失效，旧 token 的 `/__auth/renew` 返回 401；
    - **删除该设备全部旧 session**：旧 `dsh_gate_session` 立即未认证；
@@ -550,9 +547,9 @@ de12.de5.net:8443 {
    - `createdAt = now`（重新配对 = 重新验证，**绝对上限窗口重新起算**），`expiresAt = min(now + deviceTtlDays, createdAt + deviceAbsoluteTtlDays)`；
    - 不新增设备、不占新名额、**不触发 `device_limit`**；即使已达到 `maxDevices`（默认 100），已有 ID 仍可替换成功；新 ID 才按上限检查；
    - 响应 200 增加 `replaced: true` 并回显 `clientDeviceId`；新建时 `replaced: false`（不传 ID 时也不回显）。
-   缺失该字段保持「每次新建」；提供但格式非法（非字符串、长度不在 8–64、含非法字符）返回 **400 `invalid_client_device_id`**，审计 `pair_redeem`（detail `invalid_client_device_id`），且**不消耗票据**（store 层同样拒绝非法值，不会静默降级为新建）。并发同 ID 的 redeem 由 store 锁串行，最终只有一条设备记录。`clientDeviceId` 只是去重提示，不是认证因子，必须使用安装级高熵随机值（App 使用 UUID）；它仅存内部 `state.json`，管理 API/审计/日志不展示。v0.7.3 起，登录/renew 的设备 token 校验、滑动续期与会话创建在 store 锁内一次完成（`authenticateDeviceToken`）：即使替换与在途的旧 token 请求并发，旧 token 也只会得到 401，或它刚创建的会话被替换删除，不会在替换后留下存活会话。
+   缺失该字段保持「每次新建」；提供但格式非法（非字符串、长度不在 8–64、含非法字符）返回 **400 `invalid_client_device_id`**，审计 `pair_redeem`（detail `invalid_client_device_id`），且**不消耗票据**（store 层同样拒绝非法值，不会静默降级为新建）。并发同 ID 的 redeem 由 store 锁串行，最终只有一条设备记录。`clientDeviceId` 只是去重提示，不是认证因子，必须使用安装级高熵随机值（App 使用 UUID）；它仅存内部 `state.json`，管理 API/审计/日志不展示。登录/renew 的设备 token 校验、滑动续期与会话创建在 store 锁内一次完成（`authenticateDeviceToken`）：即使替换与在途的旧 token 请求并发，旧 token 也只会得到 401，或它刚创建的会话被替换删除，不会在替换后留下存活会话。
 
-> **Caveat**：上述「立即失效」针对后续 HTTP 请求与 `/__auth/renew`；已建立的 WebSocket 隧道不会因 session 删除而立即断开，需等连接自然关闭。并发下的 token 轮换保证已由 v0.7.3 原子校验保证，不会在替换后留下存活会话。
+> **Caveat**：上述「立即失效」针对后续 HTTP 请求与 `/__auth/renew`；已建立的 WebSocket 隧道不会因 session 删除而立即断开，需等连接自然关闭。并发下的 token 轮换保证已由原子校验保证，不会在替换后留下存活会话。
 
 ```bash
 # 同一 App 安装 ID 重新配对：第一次 replaced=false，第二次 replaced=true（设备数不变）
@@ -609,7 +606,7 @@ curl -k -X POST -H "x-auth-gate-admin-key: $ADMIN" -H 'content-type: application
 # 审计（最近 100 条）
 curl -k -H "x-auth-gate-admin-key: $ADMIN" "$BASE/__admin/api/audit"
 
-# adminKey 只从 $DSH_HOME/auth-gate/admin.key（0600）读取；v0.6.1 起
+# adminKey 只从 $DSH_HOME/auth-gate/admin.key（0600）读取
 # /__admin/api/admin-key 不再向 loopback 访客返回密钥（监听 loopback 时整条通道禁用）
 ```
 
@@ -624,7 +621,7 @@ curl -k -H "x-auth-gate-admin-key: $ADMIN" "$BASE/__admin/api/audit"
 ## 数据与安全
 
 - `state.json`（`$DSH_HOME/auth-gate/state.json`，0600）：
-  - `user`：用户名、`scrypt$16384$8$1$…` 密码哈希、TOTP Base32 密钥（配对的二次因素）、`lastTotpCounter`（历史字段；v0.4.0 登录与配对均不消费）。
+  - `user`：用户名、`scrypt$16384$8$1$…` 密码哈希、TOTP Base32 密钥（配对的二次因素）、`lastTotpCounter`（历史字段；登录与配对均不消费）。
   - `devices`：`tokenHash`（SHA-256）、名称、平台、origin、创建/最后使用/到期时间。
   - `tickets`：`ticketHash`、创建/到期；过期后保留 10 分钟以便返回 `expired_ticket`。
   - `sessions`：`tokenHash`、deviceId、创建/最后使用/最后刷新（`lastRefreshedAt`）/空闲到期（`expiresAt`）/绝对上限（`absoluteExpiresAt`，旧版本记录可能缺失，下次刷新补齐；最多 100 条）。
@@ -634,12 +631,12 @@ curl -k -H "x-auth-gate-admin-key: $ADMIN" "$BASE/__admin/api/audit"
 - `setup.token`（0600）：仅在未初始化时存在的一次性 WebUI 初始化令牌；初始化成功后删除。**唯一一条未初始化启动日志会带完整初始化链接**（这是全系统唯一在日志中出现完整 setup token 的地方）；能读 journald/该文件的主体会获得管理员创建能力，请按 root 级秘密保护，并在初始化后确认文件已删除。
 - 浏览器只持有 `dsh_gate_session` / `dsh_gate_device` / `dsh_gate_csrf` 三个 cookie；dsh 的 `dsh-auth-*` cookie 仅存在网关进程内，请求上游时注入、响应时剥离（HTTP 与 WebSocket 握手都剥离）。
 - 反代在把 Origin 改写成 dsh authority 之前，先校验入站 Origin 必须等于网关自身 authority；WebSocket 同样校验。这样同站跨源的恶意页面不能借会话 cookie 让 dsh 误判为同源。
-- loopback 管理资格还要求 Host 属于 `publicUrl` / 监听地址 / localhost 的 authority，避免 DNS rebinding 页面从 loopback 读取管理 API；且网关自身监听 loopback 时整条通道禁用（v0.6.1）。
+- loopback 管理资格还要求 Host 属于 `publicUrl` / 监听地址 / localhost 的 authority，避免 DNS rebinding 页面从 loopback 读取管理 API；且网关自身监听 loopback 时整条通道禁用。
 - 管理页的会话通道只影响 `/__admin*`：有效的 `dsh_gate_session` 可以直接打开管理页；该通道的 POST 必须通过 CSRF 双提交，**生成配对码必须校验 6 位 TOTP**，**改密/重置 TOTP 必须校验当前密码**。`/__auth/*` 与反代/WebSocket 的规则没有变化。
 - **session 即管理能力**：持有任一有效 session 即可查看设备/会话/审计、吊销设备；生成配对码还需 TOTP，改密/重置 TOTP 还需当前密码。设备 token 或 session 泄露应按管理凭据泄露处理（立即吊销设备/改密），不要把 session cookie 暴露给第三方页面或日志。
-- **吊销级联（v0.7.0）**：删除设备时在同一次原子状态写入中删除设备记录、该设备的**全部** session（可能同时有多个浏览器/App 会话）并清空全部待用配对票据；设备因过期被 prune 时同样删除其全部 session。因此旧 deviceToken 的 `renew`、该设备所有 `dsh_gate_session` cookie 以及 `dsh_gate_device` cookie 都会在下一次请求失效（401 / 管理 API 403）。
-- **缓存隔离（v0.7.1）**：任何附带 `Set-Cookie` 的响应（含反代响应）都带 `cache-control: private, no-store` 与 `vary: cookie`；public asset 请求不刷新会话、不重发 cookie。前置共享缓存即使忽略 `Vary`，也会因 `private, no-store` 不缓存这些响应。
-- **deviceToken / 设备 cookie 视同账号凭据**：v0.4.0 登录只校验设备 cookie + 用户名密码；更关键的是 `POST /__auth/renew` **只需要 JSON body 里的 `deviceToken`，不需要密码**，可直接换出新 session。所以 `deviceToken`/`dsh_gate_device` 泄露 = 设备有效期内的持久访问（默认滑动 90 天、绝对上限 365 天，每次 renew 重新计时；可反复 renew），密码已知时还可直接登录。泄露立即在管理台吊销该设备；怀疑密码同时泄露时改密（会撤销全部设备与会话）。不要发到聊天或日志。网关不校验设备指纹，清 cookie/换浏览器等于新设备，需重新配对。
+- **吊销级联**：删除设备时在同一次原子状态写入中删除设备记录、该设备的**全部** session（可能同时有多个浏览器/App 会话）并清空全部待用配对票据；设备因过期被 prune 时同样删除其全部 session。因此旧 deviceToken 的 `renew`、该设备所有 `dsh_gate_session` cookie 以及 `dsh_gate_device` cookie 都会在下一次请求失效（401 / 管理 API 403）。
+- **缓存隔离**：任何附带 `Set-Cookie` 的响应（含反代响应）都带 `cache-control: private, no-store` 与 `vary: cookie`；public asset 请求不刷新会话、不重发 cookie。前置共享缓存即使忽略 `Vary`，也会因 `private, no-store` 不缓存这些响应。
+- **deviceToken / 设备 cookie 视同账号凭据**：登录只校验设备 cookie + 用户名密码；更关键的是 `POST /__auth/renew` **只需要 JSON body 里的 `deviceToken`，不需要密码**，可直接换出新 session。所以 `deviceToken`/`dsh_gate_device` 泄露 = 设备有效期内的持久访问（默认滑动 90 天、绝对上限 365 天，每次 renew 重新计时；可反复 renew），密码已知时还可直接登录。泄露立即在管理台吊销该设备；怀疑密码同时泄露时改密（会撤销全部设备与会话）。不要发到聊天或日志。网关不校验设备指纹，清 cookie/换浏览器等于新设备，需重新配对。
 - 密码：scrypt（N=16384, r=8, p=1，16 字节 salt，32 字节 key），`timingSafeEqual`；最小 10 位。
 - 所有票据/设备/会话 token 都是 32 字节随机数的 base64url，只存 SHA-256；比较使用常数时间比较。
 - CSRF：登录与所有 loopback/会话管理写操作都要求 `x-auth-gate-csrf` 请求头与 `dsh_gate_csrf` cookie 一致（loopback 通道仅在监听非 loopback 地址时存在）；adminKey 是请求头 bearer 凭据，免 CSRF。登录页与管理页 CSP 都使用 per-response nonce，无内联事件处理器、无外部 CDN。
@@ -650,14 +647,14 @@ curl -k -H "x-auth-gate-admin-key: $ADMIN" "$BASE/__admin/api/audit"
 - 上游 TLS：`upstreamInsecureTls: true` 只适用于本机/内网自签 dsh；如果 dsh 换成正受信证书，应改为 `false`。
 - **admin.key 文件权限 = 管理权**：完整密钥只在 `$DSH_HOME/auth-gate/admin.key`（0600；未设置 `DSH_HOME` 时 `~/.dsh/auth-gate/admin.key`）；systemd journal 中只有掩码，能读 journal 不再等于能管理网关。仍请把该文件当作 root 级秘密。
 - 换证书/改 `publicUrl` 后，App 内保存的旧指纹或旧设备 origin 会不匹配：需要重新扫码配对（`state.json` 里已有设备可先吊销）。前置代理证书续期后必须重新读取 `publicFingerprint`，否则二维码仍带旧指纹、App 会拒绝配对。
-- 前置反向代理（对外 TLS 在代理终止、HTTPS 回源到网关）是 v0.6.2 支持的场景，但必须：① 设置 `publicFingerprint` 为代理证书指纹；② 保持网关监听 LAN 地址、frpc `local_ip` 同地址（全程不要出现 loopback 回源）；③ 只通过 adminKey/会话管理网关，并接受源 IP 变成代理地址、按 IP 限流共享；④ 代理必须 **HTTPS 回源**，且网关自身 TLS 不能省（自签即可）。明文 HTTP 回源不是「关掉网关 TLS 就行」的替代方案：配置校验要求「配了 `tlsCert`/`tlsKey` ⇒ `publicUrl` 必须 https；没配 TLS ⇒ `publicUrl` 必须 http」，明文回源时 `publicUrl` 只能是 http，App 无法用 HTTPS + 指纹配对，因此**不支持**。
+- 前置反向代理（对外 TLS 在代理终止、HTTPS 回源到网关）是受支持的场景，但必须：① 设置 `publicFingerprint` 为代理证书指纹；② 保持网关监听 LAN 地址、frpc `local_ip` 同地址（全程不要出现 loopback 回源）；③ 只通过 adminKey/会话管理网关，并接受源 IP 变成代理地址、按 IP 限流共享；④ 代理必须 **HTTPS 回源**，且网关自身 TLS 不能省（自签即可）。明文 HTTP 回源不是「关掉网关 TLS 就行」的替代方案：配置校验要求「配了 `tlsCert`/`tlsKey` ⇒ `publicUrl` 必须 https；没配 TLS ⇒ `publicUrl` 必须 http」，明文回源时 `publicUrl` 只能是 http，App 无法用 HTTPS + 指纹配对，因此**不支持**。
 
 ## 独立运行（开发/测试）
 
 `lib/standalone.js` 不依赖 dsh，读取 `AUTH_GATE_*` 环境变量，并用 `DSH_TOKEN_URL`（journal 里带 launch token 的 URL）或 `DSH_TOKEN`（裸 token）兑换 dsh 会话 cookie。
 
 ```bash
-# 必须是本机 LAN 地址（不要用 127.0.0.1/::1：v0.6.1 会拒绝并禁用本机自动管理通道）
+# 必须是本机 LAN 地址（不要用 127.0.0.1/::1：网关会拒绝并禁用本机自动管理通道）
 export AUTH_GATE_LISTEN_HOST=192.0.2.10
 export AUTH_GATE_LISTEN_PORT=3456
 export AUTH_GATE_UPSTREAM=https://192.0.2.10:3080
@@ -678,7 +675,7 @@ node lib/standalone.js
 | `AUTH_GATE_UPSTREAM` | dsh 根 URL（当前 `https://192.0.2.10:3080`） |
 | `AUTH_GATE_UPSTREAM_INSECURE_TLS` | `true/false`；自签证书用 `true` |
 | `AUTH_GATE_PUBLIC_URL` | 二维码/登录跳转使用的外部 origin |
-| `AUTH_GATE_PUBLIC_FINGERPRINT` | 可选（v0.6.2）：二维码 `fp=` 使用的对外证书 SHA-256 hex；留空用网关自身证书（`auto` 仅 API POST 可用） |
+| `AUTH_GATE_PUBLIC_FINGERPRINT` | 可选：二维码 `fp=` 使用的对外证书 SHA-256 hex；留空用网关自身证书（`auto` 仅 API POST 可用） |
 | `AUTH_GATE_TLS_CERT` / `AUTH_GATE_TLS_KEY` | 同时提供则启用 HTTPS；只给一个会启动失败 |
 | `AUTH_GATE_STATE_DIR` | 状态目录，默认 `$DSH_HOME/auth-gate` |
 | `AUTH_GATE_ADMIN_KEY_FILE` | 管理密钥文件，默认 `<stateDir>/admin.key` |
@@ -695,7 +692,7 @@ node lib/standalone.js
 
 ## 版本与更新
 
-- **所有版本变更与发行说明统一发布在 GitHub Releases**：<https://github.com/chjy090/dsh-pairing-gate/releases>。
+- **所有版本变更与发行说明统一发布在 GitHub Releases**：<https://github.com/chjy090/dsh-pairing-gate/releases>。各版本之间的差异、升级与回滚说明以 Releases 中的 release notes 为准。
 - **升级（link 安装）**：更新源码（`git pull` 或替换插件目录）→ `systemctl restart dsh`，无需重新 `dsh plugin add`。账号、TOTP、已配对设备、`state.json` 与 `network.json` 都会保留，无需迁移（**v0.7.4 例外，见下**）。**例外：v0.7.1 → v0.7.2 是改名版本**，profile 里仍记着旧包名 `dsh-auth-gate`，只 `git pull` + 重启会因新 bundle 名 `dsh-pairing-gate` 无法解析而加载失败；必须按「从旧名 `dsh-auth-gate` 迁移」先 `remove` 旧名再 `add link:`，然后重启。
 - **⚠️ v0.7.3 → v0.7.4 是破坏性默认值变更**：v0.7.4 起插件包自带的 `cordis.patch.yml` 改为可移植默认值（`listenHost: 127.0.0.1`、`listenPort: 3443`、`upstream: http://127.0.0.1:3080`、不配置 TLS/publicUrl）。已有部署如果依赖旧的 bundle 默认值，**必须先**在 profile `$DSH_HOME/profiles/web/cordis.patch.yml` 加 `- id: auth-gate` 的 override 并写全生产配置（`listenHost`/`upstream`/`upstreamInsecureTls`/`tlsCert`/`tlsKey`/`publicUrl` 等，模板见 installation §2.2.2），重启后才不会掉线。否则：`network.json` 里的 https `publicUrl` 会因「未配置 TLS」被判无效并回退到 bundle 默认值，网关落到 `127.0.0.1:3443` 纯 HTTP、上游 `127.0.0.1:3080` 不可达，外部 3443/公网入口失效。改完 override 后重启，确认 journal 出现 `listening on https://<你的对外地址>` 且 `curl -k https://<LAN>:3443/__auth/login` 为 200。
 - **升级前建议备份**：`tar -czf ~/auth-gate-$(date +%F).tgz -C "$DSH_HOME" auth-gate`（含账号与设备，权限 0600）。
@@ -710,17 +707,17 @@ npm test                       # node:test：password/base32/totp/ratelimit/stor
 bash tests/e2e-standalone.sh   # 真实 TLS 网关全流程（1~2 分钟，含 WebUI 会话通道 + 初始化向导 + 网络设置/热重建 + 对外证书指纹 + 滑动续期/吊销级联）
 ```
 
-当前基线（v0.7.4）：`npm test` **171/171 pass**（新增 4 项：空配置解析为可移植默认、打包默认文件不含本机部署值、首装冒烟、无 `DSH_HOME` 时 `stateDir` 回退 `~/.dsh/auth-gate`）；`bash tests/e2e-standalone.sh` → **E2E PASSED（29 步 / 39 PASS）**（e2e 未改动）。v0.7.4 首装冒烟测试用临时 `stateDir` + 默认配置启动 standalone：登录页 200、`/__admin` 可访问、未认证 `GET /__admin/api/admin-key` 返回 403 且不回显密钥（loopback 管理通道禁用）、setup 链接与 0600 `setup.token`、SIGTERM 干净退出且无临时文件/进程；单测另回归「显式 TLS 配置仍要求 publicUrl https」。（`tests/client-device-id.test.js` 9 项、`tests/device-token-atomic.test.js` 6 项；e2e 第 28 步验证同一 `clientDeviceId` 重配：设备记录数不变、旧 token renew 401、新 token renew 200、非法 ID 400、管理 API 不回显该 ID；第 29 步验证并发旧 token renew 与同 ID 重配交错后旧 session 为 0、旧 token 401、新 token 200）。P2 加固新增 4 项单测：store 层非法 `clientDeviceId` 拒绝且票据仍可用、替换清空其它待用票据、重复非空 `clientDeviceId` 的 state 拒绝启动、`maxDevices` 1/100 边界接受而 0/101 拒绝。第 21 步在 LAN 地址 + 独立 `stateDir` 的已初始化实例上验证 session+TOTP 改 publicUrl、QR 使用中转 origin、invalid 400、adminKey 恢复；第 22 步验证 LAN 地址上 3458→3459→3458 热重建（先绑新后关旧、旧端口关闭/新端口 200/network.json 持久化）；第 23 步验证通配地址（含 `::0`/`0::0`/`00::`/`::ffff:0.0.0.0`）、loopback（`127.0.0.1`/`::1`）、上游端口、http/https 不匹配均 400 且不持久化/不改监听，并验证「绑定成功但 network.json 持久化失败」时关闭新监听、旧端口继续 200；第 24 步验证损坏 `network.json` 启动回退到 bundle config；v0.7.1 新增/改动：第 3/11/19 步的 `no-store` 断言兼容 `private, no-store`；第 26 步新增注入时钟的 P2-1（cookie 响应头 + asset 不刷新）与 P2-3（旧设备越过绝对上限后 token/session 失效）场景；第 27 步对真实网关断言登录页/登录/renew 响应带 `private, no-store` + `Vary: cookie`，带会话 cookie 的 public asset 不返回 `Set-Cookie` 且不被要求登录。第 25 步验证 `publicFingerprint`：空值回退网关证书、固定值（大写归一）驱动 QR `fp=`、`"auto"` 对 setup 实例自身 TLS 握手读出证书指纹并落盘、探测失败（关闭端口）400 `fingerprint_fetch_failed` 且不落盘、session 写入仍须 TOTP、审计只留前 8 位。主网关仍监听 loopback，用于验证 P0 修复（无凭据读 state/admin-key 均 403，启动 WARN）。
+当前基线（v0.7.5）：`npm test` **171/171 pass**；`bash tests/e2e-standalone.sh` → **E2E PASSED（29 步 / 39 PASS）**。v0.7.5 只整理文档/README（版本历史迁到 GitHub Releases、补充生产前置条件提示），没有改运行逻辑或测试。首装冒烟测试用临时 `stateDir` + 默认配置启动 standalone：登录页 200、`/__admin` 可访问、未认证 `GET /__admin/api/admin-key` 返回 403 且不回显密钥（loopback 管理通道禁用）、setup 链接与 0600 `setup.token`、SIGTERM 干净退出且无临时文件/进程。
 
 E2E 行为：
 
 - 优先使用调用者提供的 `DSH_TOKEN_URL`（配合 `E2E_UPSTREAM`）；否则尝试 `E2E_USE_JOURNAL=1` 从 `journalctl -u dsh` 取启动 URL；
 - 若 journal 里没有（当前机器就是这种情况：启动行已被日志滚动掉，且不允许重启生产 dsh），脚本会以**独立 `DSH_HOME`** 在 `127.0.0.1:3099` 启动一个临时 dsh web 实例（同样使用 dsh 原生 HTTPS + 同一张证书），再把网关反代到它。生产 dsh（3080）完全不受影响。
-- 主网关固定监听 `127.0.0.1:3456`（避开 dsh 的 3080 与旧代理的 3443，状态目录 `.test-state`，结束删除）；该实例用于验证 v0.6.1 的「loopback 监听自动禁用本机管理通道」。网络设置/初始化向导实例监听本机 LAN 地址的 3458，热重建在同一 LAN 地址的 3458↔3459 之间进行（network API 拒绝 loopback）。
-- 会话通道的 E2E 请求通过 `curl --interface <本机非 loopback IP>` 模拟 LAN 客户端（默认取 `hostname -I` 的第一个非 127 地址，可用 `E2E_SOURCE_IP` 覆盖）；v0.6.1 起主网关监听 loopback 时本机自动通道已禁用，会话仍必须完整通过 CSRF/TOTP/currentPassword。不需要改防火墙或额外监听端口。
+- 主网关固定监听 `127.0.0.1:3456`（避开 dsh 的 3080 与旧代理的 3443，状态目录 `.test-state`，结束删除）；该实例用于验证「loopback 监听自动禁用本机管理通道」。网络设置/初始化向导实例监听本机 LAN 地址的 3458，热重建在同一 LAN 地址的 3458↔3459 之间进行（network API 拒绝 loopback）。
+- 会话通道的 E2E 请求通过 `curl --interface <本机非 loopback IP>` 模拟 LAN 客户端（默认取 `hostname -I` 的第一个非 127 地址，可用 `E2E_SOURCE_IP` 覆盖）；主网关监听 loopback 时本机自动通道已禁用，会话仍必须完整通过 CSRF/TOTP/currentPassword。不需要改防火墙或额外监听端口。
 - 默认会在结束时删除带 launch token 的临时 dsh 日志。`E2E_KEEP=1` 会保留 `.test-tmp/` 与 `.test-dsh-home/` 便于排障，但**其中的 dsh 日志含 launch token**，排查完请立即删除。
 
-覆盖（29 步）：302 登录跳转 / 401 JSON；CSRF 与安全头；admin bootstrap；QR 指纹与 fragment 票据；配对、单次票据、过期票据；无设备 `device_required`；**已配对设备 + 密码登录（无 TOTP）与 cookie 标志**；device token renew（仅 body，拒绝空 body/cookie 回退）；反代 `/` 含 `__DSH_BOOT__`；上游 Set-Cookie 剥离；WebSocket `/api/remote.mux` 401/101；**登录会话访问 `/__admin` 200（账号/配对/设备/会话/审计区块、配对区 6 位动态验证码输入框、无 pair-current-password）、无会话 302**；会话 POST 无 CSRF 403；**会话通道生成 QR 缺 TOTP 403 `totp_required`、错 TOTP 403 `totp_invalid`、正确 200、同一 TOTP 窗口连续两次 200**，随后配对浏览器设备、吊销后 token renew 401；登出；5 次错误密码 429；吊销设备；**会话通道改密/重置 TOTP 强制 currentPassword，成功后设备/会话清空；改密后新密码直接登录（无 TOTP），新 session 用新 TOTP 签发 QR，旧 TOTP secret 与缺失码 403**；开放重定向防护；审计与日志不含秘密；文件 0600；**第 19/20 步（v0.5.0）**：全新 `stateDir` 实例上未初始化 `/__admin` 200 向导（DENY/no-store/CSP nonce）、status 不回显 token、错 token 403、adminKey 轮换 token 且旧 token 403、begin 返回 QR/secret、错 TOTP 403 且仍未初始化、正确 confirm 200 + `dsh_gate_device` cookie + 用户/TOTP 已确认 + web 设备 + `setup.token` 删除；初始化后 begin/confirm/token-rotate 409、密码登录 200、会话 `/__admin` 200、匿名 302、审计含 setup 事件且无秘密；**第 21~23 步（v0.6.0）**：`GET /__admin/api/network` 初始 config/规则、服务端页与 `?embed=1` 含网络设置区块、session 改 publicUrl 缺/错 TOTP 403 + 非法 origin 400 不落盘、正确 TOTP 200 + 源码 `network.json` 0600 + `POST /qr` 的 URL 使用 `https://relay.example:8443`、adminKey 恢复；adminKey 热重建 3458→3459→3458（响应 `rebound:true`、旧端口关闭、新端口 `/__auth/login` 200、新端口会话 `/__admin` 200、network.json 持久化、无需重启）；通配监听地址/等上游端口/http 与 TLS 不匹配均 400、network.json 与监听不变、审计含 `network_update`、`network_invalid_*` 且不含 TOTP secret；**第 24 步（v0.6.1）**：损坏 `network.json` 的 standalone 继续启动、日志含 `IGNORED`/`rm -f`/`not valid JSON`、网络 API 返回 `source=config` 且监听 bundle 端口；**第 25 步（v0.6.2）**：`GET network` 返回空 `publicFingerprint` 且 `effectiveFingerprint` 等于网关证书、服务端页/`?embed=1` 含新输入框与自动读取按钮、非法指纹 400（带 `field`）、session 写指纹无 TOTP 403、固定值（大写输入归一）写入 `network.json` 并驱动 QR `fp=`、`"auto"` 对该测试实例 TLS 握手读出证书指纹并落盘/驱动 QR、关闭端口探测失败 400 `fingerprint_fetch_failed` 且不改 publicUrl/指纹、清空后 QR 回退网关证书、审计含 `public_fp=<前8位>` 与失败记录且不含完整指纹、TOTP secret 不落盘；第 2/23 步另覆盖 loopback 监听 403 + admin-key 不泄露、`127.0.0.1`/`::1` 与 IPv6 通配 400、持久化失败先绑后关回滚。 **第 26/27 步（v0.7.1）**：注入时钟下已认证 API/HTML 刷新响应为 `private, no-store` + `Vary: cookie`、public asset 即使刷新到期也不改会话且无 `Set-Cookie`、旧设备越过绝对上限后 session 未认证/renew 401 且设备被删除；真实网关上登录页（CSRF cookie）/登录/renew 响应头满足同一契约，带有效会话 cookie 的 public asset 不要求登录且不返回 `Set-Cookie`。 **第 28 步（v0.7.3）**：真实网关上同一 `clientDeviceId` 连续两次 `pair/redeem` → 设备总数不变、`deviceId` 相同、`replaced:false/true`、旧 token renew 401、新 token renew 200、管理 API 的 state 不含 `clientDeviceId`；非法 `clientDeviceId` 返回 400 `invalid_client_device_id` 且不新增设备。**第 29 步（v0.7.3 P1）**：真实网关上并发发起 8 个旧 token 的 renew，并与同 `clientDeviceId` 的重配交错，替换完成后旧 token 全部 401（或先返回 200 但会话已被删除）、该设备 session 数为 0、新 token renew 200。
+覆盖（29 步）：302 登录跳转 / 401 JSON；CSRF 与安全头；admin bootstrap；QR 指纹与 fragment 票据；配对、单次票据、过期票据；无设备 `device_required`；已配对设备 + 密码登录（无 TOTP）与 cookie 标志；device token renew（仅 body，拒绝空 body/cookie 回退）；反代 `/` 含 `__DSH_BOOT__`；上游 Set-Cookie 剥离；WebSocket `/api/remote.mux` 401/101；登录会话访问 `/__admin` 200 与匿名 302、无 CSRF 403；会话通道生成 QR 缺/错 TOTP 403、正确 200、同一 TOTP 窗口可重复；改密/重置 TOTP 强制 currentPassword 并清空设备/会话；登出；5 次错误密码 429；吊销设备；开放重定向防护；审计/日志不含秘密；文件 0600。**初始化向导（第 19/20 步）**：全新 `stateDir` 上向导页、CSP/no-store、status 不回显 token、错 token 403、adminKey 轮换 token、begin/confirm 全流程、`setup.token` 删除、初始化后写接口 409。**网络设置（第 21~25 步）**：`GET /__admin/api/network`、session 改 publicUrl 缺/错 TOTP 403、非法 origin 400、正确 TOTP 200 + `network.json` 0600、QR 使用新 origin、adminKey 热重建（先绑新后关旧）、通配/loopback 地址与上游端口冲突均 400、损坏 `network.json` 回退 bundle config、`publicFingerprint` 固定值/`auto` 探测/失败 400 `fingerprint_fetch_failed`/审计只留前 8 位。**安全加固（第 26/27 步）**：注入时钟下 `private, no-store` + `Vary: cookie`、public asset 不刷新会话、越过绝对上限的设备失效；真实网关登录页/登录/renew 响应头契约。**配对去重（第 28/29 步）**：同一 `clientDeviceId` 重配设备数不变、旧 token 401、新 token 200、非法 ID 400 且不新增设备；并发旧 token renew 与重配交错后旧 session 为 0。
 
 ## 故障排查
 
@@ -734,8 +731,8 @@ E2E 行为：
 | `setup.token` 仍存在但 `/__admin` 不是向导 | `state.json` 已配置；重启后 store 会自动删除残留文件。确认 `/__admin/api/state` 的 `configured`，并检查是否误删/覆盖了 state。 |
 | `/__admin` 302 到登录页 | 当前浏览器没有有效网关会话。先用已配对设备完成用户名+密码登录（不再需要 TOTP）；登录后会自动回到 `/__admin`。若账号不可用，改用 adminKey 应急（读 `$DSH_HOME/auth-gate/admin.key`）。未初始化时不会 302，而是直接显示向导。 |
 | 左侧栏没有「认证管理」条目 | 确认 profile 的 `dsh-pairing-gate` 行已加载（旧名安装时为 `dsh-auth-gate`）、`package.json` 含 `exports["./client"]` 和 `dsh.client`，重启 dsh 后看启动日志有无 client bundle/组合错误；浏览器硬刷新。 |
-| 「认证管理」面板空白/一直加载 | v0.4.2 起面板有错误边界，真崩溃会显示「认证管理渲染失败」卡（`error.message` + 栈前 1500 字符）并在 Console 打印 `[auth-gate]` 日志，不再是整块空白。排查顺序：① 地址栏加 `?authgate-debug=1`（或 hash `#authgate-debug`）刷新，看顶部调试卡的 `location.href/port`、`React.version`、primitives 是否加载及 real/fallback 绑定、当前渲染分支；② F12 → Console 过滤 `[auth-gate]`，复制 `render failed` / `primitive failed` 行与栈；③ 立即兜底：点错误卡「打开独立管理页 /__admin」，或直接访问 `https://<网关地址>/__admin`（同源会话可直接用）；④ v0.6.0 起面板会探测同源 `GET /__admin/api/setup/status` 来判断是否由网关提供（不再只看 3443），探测失败才会显示「不是认证网关」说明卡，3080 直连显示说明卡是设计行为；仍空白则硬刷新并检查 dsh 启动日志里的 client bundle 错误。 |
-| Console 报 `GET …/manifest.webmanifest 401 (Unauthorized)` / favicon 401 | v0.4.3 起网关对 `manifest.webmanifest`、favicon、apple-touch-icon 与 `/assets/*` 的 **GET/HEAD** 放行，浏览器不带登录态也能取到这些静态 dist 文件（数据/API 路由仍 401/302）。若重启后仍报 401：确认加载的是 0.4.3+（`node -e "console.log(require('./package.json').version)"`）、请求方法确为 GET/HEAD、且路径未被改写；`/api/*`、`/plugins/*`、`/__admin*` 返回 401 属预期。 |
+| 「认证管理」面板空白/一直加载 | 面板有错误边界，真崩溃会显示「认证管理渲染失败」卡（`error.message` + 栈前 1500 字符）并在 Console 打印 `[auth-gate]` 日志，不再是整块空白。排查顺序：① 地址栏加 `?authgate-debug=1`（或 hash `#authgate-debug`）刷新，看顶部调试卡的 `location.href/port`、`React.version`、primitives 是否加载及 real/fallback 绑定、当前渲染分支；② F12 → Console 过滤 `[auth-gate]`，复制 `render failed` / `primitive failed` 行与栈；③ 立即兜底：点错误卡「打开独立管理页 /__admin」，或直接访问 `https://<网关地址>/__admin`（同源会话可直接用）；④ 面板会探测同源 `GET /__admin/api/setup/status` 来判断是否由网关提供（不再只看 3443），探测失败才会显示「不是认证网关」说明卡，3080 直连显示说明卡是设计行为；仍空白则硬刷新并检查 dsh 启动日志里的 client bundle 错误。 |
+| Console 报 `GET …/manifest.webmanifest 401 (Unauthorized)` / favicon 401 | 网关对 `manifest.webmanifest`、favicon、apple-touch-icon 与 `/assets/*` 的 **GET/HEAD** 放行，浏览器不带登录态也能取到这些静态 dist 文件（数据/API 路由仍 401/302）。若重启后仍报 401：确认加载的是当前版本（`node -e "console.log(require('./package.json').version)"`）、请求方法确为 GET/HEAD、且路径未被改写；`/api/*`、`/plugins/*`、`/__admin*` 返回 401 属预期。 |
 | 从 3080 打开只看到提示 | 这是预期的优雅降级，不是故障；按提示改从 `https://<host>:3443` 访问。 |
 | `admin` 页/API 403 | 没有有效会话 cookie，也没有 `x-auth-gate-admin-key`（监听 loopback 时本机自动通道已禁用；非 loopback 监听时 loopback 对端也不再是常规来源）。用浏览器登录后访问 `/__admin`，或 curl 加 `x-auth-gate-admin-key`。会话通道的 POST 还要求 CSRF 头 + cookie。 |
 | 会话通道生成配对码返回 403 `totp_required` / `totp_invalid` | 通过登录会话生成配对码时必须输入认证器当前的 6 位动态验证码；检查手机/服务器时间是否同步（±1 窗口）。也可以改用 adminKey 通道（loopback 通道在 loopback 监听时已禁用）。 |
@@ -750,11 +747,10 @@ E2E 行为：
 
 ## 已知限制 / 未验证项
 
-- **生产 dsh 未重启**：本轮没有重启生产 dsh。v0.4.0 的 client bundle 只在隔离 `DSH_HOME` 的临时 dsh（`127.0.0.1:3097`，明文网关 3457）验证了页面 200、boot manifest、bundle/combo 200 与 `node --check`，并用 Node VM 渲染 harness 覆盖面板逻辑；**没有在真实浏览器里点开侧边栏面板**，primitives 的真实像素布局、剪贴板权限、QR 扫码和亮/暗主题观感需生产生效后肉眼确认一次。v0.4.1 只改了 `lib/client.js` 的 TOTP 徽标取值与文案，已 `node --check` 且服务端单测覆盖 `totpConfigured`。v0.4.2 定位到 3443 面板空白的真实根因（`totpBound` 未定义，见 `tests/client-render.test.js` 的 ready 分支回归），新增错误边界/调试卡/primitives fallback，并以 fake React + VM harness 覆盖；但**仍未在真实浏览器里点开面板验证**，重启生效后请按「故障排查」用 `?authgate-debug=1` 与 Console 确认一次。v0.4.3 只放行浏览器公开静态资源（manifest/favicon/touch icons 与 `/assets/*` 的 GET/HEAD，其余仍要求会话），已单测覆盖；**生产 dsh 仍未重启**，因此「Console 不再出现 manifest 401」尚未在真实浏览器验证，重启后刷新 3443 页面确认一次，并顺带确认 `/api/*`、`/plugins/*`、`/__admin*` 仍返回 401/302。
-- **v0.5.0 生产生效前的预检**：在隔离 `DSH_HOME`（复制生产 profile，临时 dsh `127.0.0.1:3097` + 明文网关 `127.0.0.1:3457`）验证了：全新独立 stateDir 下网关启动打印初始化链接、`GET /__admin` 200 向导页、公开 status、adminKey 轮换 token、begin/confirm 完整完成、`setup.token` 删除；已初始化后匿名（非 loopback 源）`/__admin` 仍 302、有会话 200、密码登录 200；boot manifest 含 `dsh-auth-gate/client.js`（rev `e2163007a545`），单文件 bundle 200 / 93 780 B、含 `loadSetupStatus`、`node --check` 通过。清理后 3097/3457 均已关闭、隔离目录删除；生产 dsh 未重启（PID 未变）。**尚未在生产 3443 上验证**：生产已初始化，升级后不会出现向导；真实浏览器里的向导三步交互（扫码/TOTP/跳转）只在 VM/curl 层覆盖，生效后如要演练需另起全新 stateDir 实例。
-- **v0.6.0 网络设置预检（隔离，未触碰生产）**：复制生产 profile 到 `/opt/ai_code/preflight-dsh`，临时 dsh 监听 `127.0.0.1:3097`（明文），网关 `127.0.0.1:3457`（`tlsCert/Key:null`、`publicUrl:http://127.0.0.1:3457`、独立 stateDir）。验证：boot manifest 含 `dsh-auth-gate/client.js`（rev `f2e78d364815`），下载的单文件 bundle 200 / 108 833 B、`node --check` 通过；用该下载 bundle 跑 VM harness 11/11（含「设置」tab 渲染与**非 3443 origin 探测**）；服务端 `/__admin`（及 `?embed=1`）含网络设置区块；adminKey bootstrap 后 `GET/POST /__admin/api/network` 正常；热重建 3457→3460→3457 成功（旧端口关闭、新端口 `/__auth/login` 200、新端口会话管理页 200、`network.json` 0600，dsh PID 未变，无重启）。清理后 3097/3457/3460 关闭、隔离目录删除；生产 dsh PID 2425514 未变、生产 3080/3443 未重启、生产 `$DSH_HOME/auth-gate/network.json` 仍不存在。**未验证**：真实浏览器中的设置表单/确认/toast、真实 frp 链路、浏览器对证书 SAN 的告警，以及监听切换瞬间的并发请求/SSE/WebSocket 重连行为。
+- **client bundle 的验证范围**：通过 `node --check` 与 Node VM 渲染 harness 覆盖；面板由 `PanelErrorBoundary` 兜底（真崩溃显示「认证管理渲染失败」卡），primitives 的真实像素布局仍需真机验收（见下方「真浏览器交互未自动化验证」）。
+- **未在生产重启/真机验证**：本轮只改文档与版本号，未重启生产 dsh、未改 App；初始化向导三步交互、设置表单/toast、真实 frp 链路、浏览器对自签证书 SAN 的告警，以及监听切换瞬间的并发请求/SSE/WebSocket 重连行为仍需在真实环境验收。
 - **认证语义变更**：登录不再要求 TOTP；已配对设备上「密码正确即可登录」。这是刻意的产品取舍，风险与吊销建议见上方「认证模型与风险」。设备丢失、密码泄露、设备 cookie 泄露都应按凭据泄露处理（吊销设备/改密）。
-- **Android App v0.4.0** 不在本包范围；App 端扫码/`fp` pin/`renew`/登出的行为需真机联调。
+- **Android App（不在本包范围）**：App 端扫码/`fp` pin/`renew`/登出的行为需真机联调。
 - 单用户、无 WebAuthn；WebUI 管理页为服务端渲染 + 原生 JS，在线状态是按 120 秒活跃窗口计算的近似值。
 - **真浏览器交互未自动化验证**：E2E 用 curl 覆盖服务端页面/API/CSRF/currentPassword，VM harness 覆盖原生面板的树/文案/请求/轮询/清理；但真实浏览器中的 primitives 布局、SegmentedTabs 键盘导航、剪贴板权限弹窗、QR 扫码和亮/暗主题显示仍需人工点一遍。服务端 `/__admin` 的 `confirm()` 弹窗等也仍属人工验收范围。
 - WebSocket 上游 401 不会像 HTTP 那样自动刷新 cookie 重试一次（HTTP 请求会先刷新，通常足够）；如需更强保证，重连即可。

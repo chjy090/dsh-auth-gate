@@ -1,6 +1,6 @@
 {
   "name": "dsh-pairing-gate",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "type": "module",
   "main": "lib/index.js",
   "description": "Device-pairing gateway for DeepSeek Harness: TOTP-authorised QR device pairing, username/password login, sliding sessions, reverse proxy with WebSocket tunnelling, optional TLS and public exposure.",
