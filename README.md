@@ -4,6 +4,37 @@
 
 DeepSeek Harness（dsh）的前台认证网关插件：**TOTP 授权的扫码设备配对 + 用户名密码登录**，认证通过后把请求反代到 dsh（含 WebSocket）。
 
+> **路径约定**：下文所有 `$DSH_HOME/auth-gate/...` 都是 dsh 状态目录下的路径；**未设置 `DSH_HOME` 时 `stateDir` 回退到 `~/.dsh/auth-gate`**（v0.7.4 起没有 `DSH_HOME` 也能直接启动，`admin.key`/`state.json`/`setup.token`/`network.json` 都在该目录）。
+
+## 快速开始
+
+v0.7.4 起仓库默认配置是**可移植的本机 HTTP 默认值**，新机器装完即可启动，不依赖 TLS 证书或本机部署地址。
+
+1. **安装**（`$PLUGIN_DIR` 是插件目录；`dsh plugin add` 会自动注入 `auth-gate`，不要重复写 `insert:`），然后重启 dsh：
+
+   ```bash
+   cd $PLUGIN_DIR && npm install --no-audit --no-fund   # 首次安装 qrcode 依赖
+   dsh plugin --profile web add link:$PLUGIN_DIR        # 也可以是一个 git URL
+   systemctl restart dsh
+   ```
+
+2. **首次初始化**：启动日志会打印一次性链接（未初始化时才有，`journalctl -u dsh -n 200 --no-pager | grep 'setup required'`）
+
+   ```text
+   auth-gate: setup required — open http://127.0.0.1:3443/__admin#setup=<token>
+   ```
+
+   也可以从 `$DSH_HOME/auth-gate/setup.token` 读取 token（未设置 `DSH_HOME` 时默认在 `~/.dsh/auth-gate/setup.token`）。在**本机浏览器**打开该链接（`http://127.0.0.1:3443/__admin#setup=<token>`），按向导创建管理员并绑定 TOTP，完成后当前浏览器即被配对。
+
+3. **默认只在本机明文 HTTP 上监听**：`127.0.0.1:3443`，反代本机 dsh `http://127.0.0.1:3080`。适合本机试用，**不要**直接暴露到公网。
+
+4. **跨机 / 公网 / App 配对需要 TLS**（App 扫码只接受 https 配对 URL）。**两种拓扑下网关自身都必须配置 `tlsCert`/`tlsKey`**——配置校验是「配了 TLS ⇒ `publicUrl` 必须 `https:`；没配 TLS ⇒ `publicUrl` 必须 `http:`」（`lib/config.js`）：
+   - 网关自己终止 TLS：把 `listenHost` 改为本机 LAN 地址，配置 `tlsCert`/`tlsKey`（自签即可），并设置 `publicUrl: https://<实际访问的主机>[:端口]`；
+   - 或在前面用 Caddy/Nginx 终止**对外** TLS：网关仍要配置 `tlsCert`/`tlsKey`（自签即可），代理以 **HTTPS 回源**到网关（`tls_insecure_skip_verify` 或信任网关 CA）；`publicUrl` 写代理对外的 https 地址，代理证书与网关证书不同时再把代理证书指纹填进 `publicFingerprint`；
+   - **不支持**「代理终止 TLS + 明文 HTTP 回源 + 网关不配证书」：这样网关的 `publicUrl` 只能是 http，App 无法用 HTTPS + 指纹配对。
+
+5. **改配置的位置**是 profile `cordis.patch.yml` 里按 `id: auth-gate` 的 override。Cordis 对 `config` 是**整体替换**，必须写全所有字段（可复制 [`config.example.json`](config.example.json) 修改）；不要直接改插件包内的 `cordis.patch.yml`，升级会覆盖。
+
 ## 配套仓库
 
 | 仓库 | 说明 |
@@ -26,31 +57,33 @@ v0.7.1 是 v0.7.0 的 P2 安全修复（无新功能、配置/state 格式不变
 
 v0.7.3 起，`POST /__auth/pair/redeem` 接受可选的 `clientDeviceId`（客户端生成的稳定安装 ID），用于**同一设备重复配对去重**：同一 ID 且旧记录未过期时原地复用 `device.id`、轮换 `deviceToken`（旧 token 立即失效）、删除该设备全部旧会话、把 `createdAt` 重置为本次配对时间（绝对上限重新起算）、清空全部其它待用配对票据，不新增设备也不占新名额、不触发 `device_limit`；响应带 `replaced`（`true`/`false`）并回显 `clientDeviceId`。浏览器配对不传该字段，行为不变；`maxDevices` 默认值从 8 调整为 **100**（范围仍为 1–100）。详见「配对与登录」第 6 条。
 
+v0.7.4 起，仓库默认配置改为**可移植默认值**：`listenHost: 127.0.0.1`、`listenPort: 3443`、`upstream: http://127.0.0.1:3080`，默认不配置 TLS（`publicUrl` 自动推导为 `http://127.0.0.1:3443`），不再写死本机 LAN 地址、TLS 证书绝对路径或 `upstreamInsecureTls`；新用户首装即可在本机启动。新增与默认值一致的 [`config.example.json`](config.example.json) 和首屏「快速开始」。生产/跨机/App 配对仍需在 profile override 中配置 LAN 监听 + `tlsCert`/`tlsKey` + `publicUrl: https://...`；即使对外 TLS 由 Caddy/Nginx 终止，网关自身也必须配置 `tlsCert`/`tlsKey`（自签即可）、由代理以 HTTPS 回源，再配置 `publicUrl`/`publicFingerprint`（App 扫码只接受 https 配对 URL，明文 HTTP 回源时 `publicUrl` 只能是 http，无法配对）；profile override 的 `config` 是整体替换，必须写全。
+
 v0.6.2 起，网络设置新增**对外证书指纹 `publicFingerprint`**：当 TLS 由 frp 后面的反向代理（如 Caddy）终止时，浏览器看到的是代理证书，而 App 会按二维码里的 `fp=` 做 fail-closed pinning。此时把代理证书的 SHA-256 DER 填进该字段（或点「从对外地址自动读取」），二维码就按公网实际证书 pinning，App 可正常配对；留空仍使用网关自身证书。
 
-> **v0.6.1 安全修复（P0）**：监听地址**禁止 loopback**（`127.0.0.0/8`、`::1`），并且当网关实际绑定 loopback 时自动禁用「本机 loopback 即管理员」通道（仅保留 adminKey 与会话）。这堵住了「网关监听 127.0.0.1 + frp/本机反代转发」时公网访客被当成本机管理员、直接读取 `/__admin/api/admin-key` 的路径。frpc 的 `local_ip` 必须填网关绑定的同一 LAN 地址。
+> **v0.6.1 安全修复（P0）**：管理页/`network.json` 的监听地址**禁止 loopback**（`127.0.0.0/8`、`::1`）；并且当网关实际绑定 loopback 时（例如 v0.7.4 的可移植默认配置）自动禁用「本机 loopback 即管理员」通道（仅保留 adminKey 与会话）。这堵住了「网关监听 127.0.0.1 + frp/本机反代转发」时公网访客被当成本机管理员、直接读取 `/__admin/api/admin-key` 的路径。生产用 frp 时，frpc 的 `local_ip` 必须填网关绑定的同一 LAN 地址。
 
 未认证的浏览器看不到 dsh 的 launch token，也拿不到 dsh 的会话 cookie。
 
 ```
-手机 / 浏览器 ──HTTPS(:3443)──> dsh-pairing-gate（本插件自带监听）
+手机 / 浏览器 ──HTTP/HTTPS(:3443)──> dsh-pairing-gate（本插件自带监听）
     │                             ├─ /__auth/*   登录页、CSRF、配对兑换、续期、登出
     │                             ├─ /__admin*   登录会话 / adminKey（loopback 监听时本机自动通道禁用）管理页与 API
     │                             └─ 其它路径 → 校验网关会话 → 反代 dsh（Host/Origin 改写、注入 dsh cookie、WS 隧道）
-    └──扫码──> https://<host>:3443/__auth/pair#v=1&t=<一次性票据>&fp=<证书 SHA256>
-                                  dsh 192.0.2.10:3080（原生 HTTPS，自签证书）
+    └──扫码──> https://<publicUrl>/__auth/pair#v=1&t=<一次性票据>&fp=<证书 SHA256>
+                                  dsh（默认 http://127.0.0.1:3080；生产按实际监听配置）
 ```
 
-> 网关是 dsh 前面的**第二道门**，不是 dsh 自身的替代鉴权。dsh 目前监听 `192.0.2.10:3080`，能直连该地址的人仍可看到 dsh 自己的登录入口；生产环境建议用防火墙把 3080 限制为 loopback/可信网段（本轮不改防火墙）。
+> 网关是 dsh 前面的**第二道门**，不是 dsh 自身的替代鉴权。网关默认 `upstream: http://127.0.0.1:3080`（本机部署即 dsh 自身）；能直连 dsh 3080 的人仍可看到 dsh 自己的登录入口，生产环境建议用防火墙把 3080 限制为 loopback/可信网段（本轮不改防火墙）。
 
 ## 功能
 
-- 前台 HTTPS 监听（默认 `192.0.2.10:3443`），TLS 1.2+，HSTS。
+- 前台监听默认 `127.0.0.1:3443`（明文 HTTP、无 TLS），适合本机首装/试用；生产建议使用 LAN 地址 + TLS 1.2+/HSTS。
 - 登录两要素：**已配对设备 cookie**（配对时由 6 位 TOTP 授权）+ 用户名密码（scrypt）。正常登录不填 TOTP；未配对设备固定返回 `device_required`。
 - 扫码配对：管理页（登录会话通道）必须输入认证器当前的 **6 位 TOTP**；校验只验证、不消耗登录重放计数器，所以同一 30 秒窗口可连续生成多个二维码，实际签发仍按 IP 限 10 次/分钟。一次性票据默认 120 秒、服务端只存 SHA-256；二维码只把票据放在 **URL fragment**，不会发给服务器或日志。
 - 设备管理：默认最多 100 台、默认 90 天；每台设备可单独吊销，吊销立即失效其会话；同一客户端可用 `clientDeviceId` 重复配对，仍只占一条记录。
 - **WebUI 管理页**：登录后打开 `/__admin` 即可管理账号、生成配对二维码/链接、查看设备与会话、吊销设备、重置 TOTP、修改网络设置、查看审计（详见「WebUI 管理页」）。
-- **网络设置（v0.6.0 / v0.6.1 / v0.6.2）**：管理页可修改监听地址/端口、对外地址 `publicUrl` 与对外证书指纹 `publicFingerprint`。`publicUrl` 立刻用于新的配对二维码/链接（frp 场景填中转公网 IP/域名）；`publicFingerprint` 留空表示使用网关自身 TLS 证书，填 64 位 SHA-256（或 POST `"auto"` 自动读取 publicUrl 的证书）后二维码 `fp=` 改用公网实际证书，App 可按代理证书 pinning；监听地址/端口采用**先绑新、后关旧**的热重建（先绑定成功再持久化，失败时旧监听全程可用）；监听地址必须是本机 LAN 地址，拒绝 loopback 与通配地址；覆盖值持久化到 `$DSH_HOME/auth-gate/network.json`（0600），重启后仍生效。
+- **网络设置（v0.6.0 / v0.6.1 / v0.6.2）**：管理页可修改监听地址/端口、对外地址 `publicUrl` 与对外证书指纹 `publicFingerprint`。`publicUrl` 立刻用于新的配对二维码/链接（frp 场景填中转公网 IP/域名）；`publicFingerprint` 留空表示使用网关自身 TLS 证书，填 64 位 SHA-256（或 POST `"auto"` 自动读取 publicUrl 的证书）后二维码 `fp=` 改用公网实际证书，App 可按代理证书 pinning；监听地址/端口采用**先绑新、后关旧**的热重建（先绑定成功再持久化，失败时旧监听全程可用）；管理页/`network.json` 只接受本机 LAN 地址（拒绝 loopback 与通配地址，loopback 仅用于 bundle 默认的本机首装）；覆盖值持久化到 `$DSH_HOME/auth-gate/network.json`（0600），重启后仍生效。
 - **原生侧边栏管理面板（v0.3.0）**：dsh 左侧栏「全局面板」的「认证管理」入口改为 **React + dsh 设计系统** 原生面板（不再用 iframe）：顶部状态、配对二维码/倒计时/复制、改密、重置 TOTP、设备/会话表格、最近 100 条审计；20 秒轮询（页面隐藏时暂停）、CSRF 双提交、429 倒计时、未登录/会话失效跳转登录。从 3080 直连时只显示跳转 3443 的说明卡，不发 API 请求。
 - 反代：HTTP(S) 与 WebSocket；Host/Origin 改写、入站 Cookie 删除、注入 dsh 会话 cookie、上游 `Set-Cookie` 剥离、上游 401 自动刷新 cookie 重试一次、Location 改写。
 - 会话：空闲窗口 48 小时 + 绝对上限 30 天（v0.7.0 起滑动续期）；服务端只存 token 的 SHA-256；登出、吊销设备会撤销对应会话（吊销设备级联撤销该设备全部会话）；**改密/重置 TOTP 会撤销全部会话与全部已配对设备**（需重新扫码）。
@@ -64,7 +97,8 @@ v0.6.2 起，网络设置新增**对外证书指纹 `publicFingerprint`**：当 
 ```
 dsh-auth-gate/              # 本地目录名保持不变；npm 包名为 dsh-pairing-gate
 ├── package.json
-├── cordis.patch.yml      # 插件默认配置（insert 行）
+├── cordis.patch.yml      # 可移植默认配置（insert 行）
+├── config.example.json   # 与默认值一致的可复制配置模板
 ├── lib/
 │   ├── index.js          # Cordis 入口
 │   ├── standalone.js     # 不依赖 dsh 的独立入口（开发/测试）
@@ -86,9 +120,9 @@ dsh-auth-gate/              # 本地目录名保持不变；npm 包名为 dsh-pa
 
 > 详细的安装与配置步骤见 [docs/installation.md](docs/installation.md)（前置要求、配置项、WebUI/adminKey 初始化、frp/Caddy、排障与安全模型）。
 
-## 安装（需要用户自行执行；本轮未安装、未重启 dsh）
+## 安装（详细步骤）
 
-前提：dsh 已经用 `--tls-cert/--tls-key` 原生 HTTPS 运行，证书路径与默认配置一致。
+前提：默认配置反代 `http://127.0.0.1:3080`，不要求 dsh 已启用 TLS；网关自身默认监听 `127.0.0.1:3443` 明文 HTTP。如果现有 dsh 以原生 HTTPS（自签证书）运行，在 profile override 中把 `upstream` 改为 `https://<实际地址>:3080`，并按需设置 `upstreamInsecureTls: true`。
 
 > 说明：下文的 `$PLUGIN_DIR` 表示插件目录（monorepo 中为 `<仓库根>/dsh-auth-gate`，独立 clone 的仓库中为仓库根目录）。**目录名保持 `dsh-auth-gate` 不变，只是包名改为 `dsh-pairing-gate`**，以兼容已有的 profile link 与脚本。
 
@@ -105,20 +139,35 @@ dsh-auth-gate/              # 本地目录名保持不变；npm 包名为 dsh-pa
    dsh plugin --profile web add link:$PLUGIN_DIR
    ```
 
-3. **配置覆盖（可选）**：`dsh plugin add` 已通过插件的 bundle patch 自动注入 `auth-gate`（默认配置见 `cordis.patch.yml`），**不要**再追加同 id 的 `- insert:`（会产生重复条目）。需要改监听地址/端口/上游/TLS 时，在 `$DSH_HOME/profiles/web/cordis.patch.yml` 里用 **id-targeted 覆盖**（不加 `insert:`）：
+3. **配置覆盖（生产/自定义时）**：`dsh plugin add` 已通过插件的 bundle patch 自动注入 `auth-gate`（默认配置见 `cordis.patch.yml`），**不要**再追加同 id 的 `- insert:`（会产生重复条目）。需要改监听地址/端口/上游/TLS 时，在 `$DSH_HOME/profiles/web/cordis.patch.yml` 里用 **id-targeted 覆盖**（不加 `insert:`）。注意 Cordis 对 `config` 是**整体替换**，以下字段必须写全（可复制 [`config.example.json`](config.example.json) 后修改）：
 
    ```yaml
    - id: auth-gate
      name: 'dsh-pairing-gate'
      config:
-       listenHost: 192.0.2.10
+       # 整体替换，不是深合并：不要只写要改的字段。
+       listenHost: 192.0.2.10            # 示例：本机 LAN 地址（生产必须替换）
        listenPort: 3443
-       # …只写需要覆盖的字段，其余沿用 bundle 默认…
+       upstream: http://127.0.0.1:3080   # dsh 为自签 HTTPS 时改 https://... 并设 upstreamInsecureTls: true
+       upstreamInsecureTls: false
+       publicUrl: https://192.0.2.10:3443
+       tlsCert: /etc/dsh/tls/dsh.crt.pem
+       tlsKey: /etc/dsh/tls/dsh.key.pem
+       stateDir: $DSH_HOME/auth-gate
+       adminKeyFile: $DSH_HOME/auth-gate/admin.key
+       sessionTtlHours: 48
+       sessionAbsoluteTtlDays: 30
+       deviceTtlDays: 90
+       deviceAbsoluteTtlDays: 365
+       maxDevices: 100
+       pairTicketTtlSeconds: 120
+       loginLock:
+         maxFailures: 5
+         windowMinutes: 15
+         lockMinutes: 15
    ```
 
-
-
-   > 插件包内的 `cordis.patch.yml` 由 `dsh.bundle.patch` 自动提供默认值；上面只需写覆盖字段即可。完整配置项说明见 [docs/installation.md](docs/installation.md)。
+   > 只写 `config: { listenPort: 3444 }` 会让其它字段退回 `lib/config.js` 内置默认值（loopback、无 TLS），生产上会导致监听地址/证书意外变化。更多字段说明见 [docs/installation.md](docs/installation.md)。
 
 4. 重启 dsh 让插件生效：
 
@@ -127,12 +176,13 @@ dsh-auth-gate/              # 本地目录名保持不变；npm 包名为 dsh-pa
    journalctl -u dsh -n 100 --no-pager | grep -E 'auth-gate|admin key'
    ```
 
-   首次启动会生成 **64 位十六进制管理密钥** 并写入 `$DSH_HOME/auth-gate/admin.key`（0600）；日志只打印掩码和路径，**不打印完整密钥**。请从该文件读取并保存到密码管理器；后续启动不再生成。
+   首次启动会生成 **64 位十六进制管理密钥** 并写入 `$DSH_HOME/auth-gate/admin.key`（0600；未设置 `DSH_HOME` 时为 `~/.dsh/auth-gate/admin.key`）；日志只打印掩码和路径，**不打印完整密钥**。请从该文件读取并保存到密码管理器；后续启动不再生成。
 
-5. 防火墙放行 3443（例如 `firewall-cmd --add-port=3443/tcp`；本轮未修改防火墙），并尽量把 dsh 的 3080 限制为 loopback/可信网段。
+5. 防火墙：默认 loopback 监听不需要放行 3443；改为 LAN/TLS 生产入口后再放行（例如 `firewall-cmd --add-port=3443/tcp`），并尽量把 dsh 的 3080 限制为 loopback/可信网段。本轮未修改防火墙。
+
 6. 查看启动日志里的初始化链接（未初始化时才会有）：`journalctl -u dsh -n 100 --no-pager | grep 'setup required'`，然后按下一节的 WebUI 向导完成首次初始化。已初始化的生产实例升级后不会出现该链接。
 
-> v0.6.0 起可直接在管理页修改 `listenHost`/端口与 `publicUrl`（即时生效、无需重启）；bundle config 仍是首次部署的默认值。换端口后记得同步防火墙与 frp 的 `local_port`。v0.6.2 起同一页面还可设置 `publicFingerprint`（详见「网络设置 / frp 内网穿透」）。
+> v0.6.0 起可直接在管理页修改 `listenHost`/端口与 `publicUrl`（即时生效、无需重启）；bundle config 只是可移植的首次部署默认值（loopback 明文 HTTP），生产入口必须通过 profile override 或 `network.json` 配置 LAN/TLS。换端口后记得同步防火墙与 frp 的 `local_port`。v0.6.2 起同一页面还可设置 `publicFingerprint`（详见「网络设置 / frp 内网穿透」）。
 
 ### 卸载
 
@@ -167,7 +217,7 @@ systemctl restart dsh
 网关首次启动（未初始化）会生成一次性初始化令牌 `$DSH_HOME/auth-gate/setup.token`（32 字节随机数，hex，0600），并打印**唯一一条**带完整令牌的日志：
 
 ```text
-auth-gate: setup required — open https://192.0.2.10:3443/__admin#setup=<64位hex>（也可从 $DSH_HOME/auth-gate/setup.token 读取）
+auth-gate: setup required — open <publicUrl>/__admin#setup=<64位hex>（默认本机 http://127.0.0.1:3443；也可从 $DSH_HOME/auth-gate/setup.token 读取）
 ```
 
 ### 步骤
@@ -436,7 +486,7 @@ remote_port = 23443
 
 **可用做法（TLS 直通）**：仍用 `type = tcp`，把域名 DNS 指向 frps（或 frps 的公网 IP），`remote_port` 映射到网关 3443，`publicUrl` 填 `https://dsh.example.com:23443`（若能把 remote_port 映射为 443，则可省略端口）。**证书 SAN 必须包含 `dsh.example.com`**，由网关自己终止 TLS；这样浏览器和 App 都正常。证书更换后二维码 `fp` 会变化，已配对 App 需要重新扫码。
 
-**不支持的做法（frps 终止 TLS + 明文回源）**：`type = https` + `custom_domains` + `vhostHTTPSPort` 会在 frps 用 frps 的证书终止 TLS，再以明文 HTTP 转发给网关。当前版本的配置校验要求「网关没配 TLS ⇒ `publicUrl` 必须 http；配了 TLS ⇒ 必须 https」，而二维码又直接使用 `publicUrl`；同时前置代理会破坏 loopback 管理信任模型并让源 IP 全部变成代理地址。因此**不要**用 frps 终止 TLS + 明文回源的组合；请使用上面的 TLS 直通（TCP）方式，或下面的「反向代理终止 TLS + HTTPS 回源」。
+**不支持的做法（frps 终止 TLS + 明文回源）**：`type = https` + `custom_domains` + `vhostHTTPSPort` 会在 frps 用 frps 的证书终止 TLS，再以明文 HTTP 转发给网关。当前版本的配置校验要求「网关没配 TLS ⇒ `publicUrl` 必须 http；配了 TLS ⇒ 必须 https」，而二维码又直接使用 `publicUrl`；同时前置代理会破坏 loopback 管理信任模型并让源 IP 全部变成代理地址。因此**不要**用 frps 终止 TLS + 明文回源的组合；请使用上面的 TLS 直通（TCP）方式，或下面的「反向代理终止 TLS + HTTPS 回源」（注意「HTTPS 回源」不等于网关可以不要证书：下面方案里网关仍配置自签 `tlsCert`/`tlsKey`，否则 https 的 `publicUrl` 会被配置校验直接拒绝）。
 
 #### ③ frp + TLS 终止反向代理（Caddy / nginx，v0.6.2）
 
@@ -598,9 +648,9 @@ curl -k -H "x-auth-gate-admin-key: $ADMIN" "$BASE/__admin/api/audit"
 - 开放重定向：反代只把指向 upstream authority 的 http(s) Location 改写为同源相对路径；`//evil.example`、外域、`javascript:` 等一律改为 `/`。
 - 日志：脱敏，不打印密码、TOTP secret、票据、设备/会话 token、launch token；管理员密钥只打印掩码与路径，从不打印完整值。**唯一例外**：未初始化时的那一条 `setup required` 启动日志会打印完整初始化链接（含 setup token），初始化后不再出现；请限制 journald 读取权限。
 - 上游 TLS：`upstreamInsecureTls: true` 只适用于本机/内网自签 dsh；如果 dsh 换成正受信证书，应改为 `false`。
-- **admin.key 文件权限 = 管理权**：完整密钥只在 `$DSH_HOME/auth-gate/admin.key`（0600）；systemd journal 中只有掩码，能读 journal 不再等于能管理网关。仍请把该文件当作 root 级秘密。
+- **admin.key 文件权限 = 管理权**：完整密钥只在 `$DSH_HOME/auth-gate/admin.key`（0600；未设置 `DSH_HOME` 时 `~/.dsh/auth-gate/admin.key`）；systemd journal 中只有掩码，能读 journal 不再等于能管理网关。仍请把该文件当作 root 级秘密。
 - 换证书/改 `publicUrl` 后，App 内保存的旧指纹或旧设备 origin 会不匹配：需要重新扫码配对（`state.json` 里已有设备可先吊销）。前置代理证书续期后必须重新读取 `publicFingerprint`，否则二维码仍带旧指纹、App 会拒绝配对。
-- 前置反向代理（TLS 在代理终止、HTTPS 回源到网关）是 v0.6.2 支持的场景，但必须：① 设置 `publicFingerprint` 为代理证书指纹；② 保持网关监听 LAN 地址、frpc `local_ip` 同地址（全程不要出现 loopback 回源）；③ 只通过 adminKey/会话管理网关，并接受源 IP 变成代理地址、按 IP 限流共享。若代理以明文 HTTP 回源，则需关闭网关自身 TLS（`tlsCert/tlsKey: null`），此时 `publicUrl` 只能是 http，App 也无法用 HTTPS+指纹配对，因此不推荐。
+- 前置反向代理（对外 TLS 在代理终止、HTTPS 回源到网关）是 v0.6.2 支持的场景，但必须：① 设置 `publicFingerprint` 为代理证书指纹；② 保持网关监听 LAN 地址、frpc `local_ip` 同地址（全程不要出现 loopback 回源）；③ 只通过 adminKey/会话管理网关，并接受源 IP 变成代理地址、按 IP 限流共享；④ 代理必须 **HTTPS 回源**，且网关自身 TLS 不能省（自签即可）。明文 HTTP 回源不是「关掉网关 TLS 就行」的替代方案：配置校验要求「配了 `tlsCert`/`tlsKey` ⇒ `publicUrl` 必须 https；没配 TLS ⇒ `publicUrl` 必须 http」，明文回源时 `publicUrl` 只能是 http，App 无法用 HTTPS + 指纹配对，因此**不支持**。
 
 ## 独立运行（开发/测试）
 
@@ -646,7 +696,8 @@ node lib/standalone.js
 ## 版本与更新
 
 - **所有版本变更与发行说明统一发布在 GitHub Releases**：<https://github.com/chjy090/dsh-pairing-gate/releases>。
-- **升级（link 安装）**：更新源码（`git pull` 或替换插件目录）→ `systemctl restart dsh`，无需重新 `dsh plugin add`。账号、TOTP、已配对设备、`state.json` 与 `network.json` 都会保留，无需迁移。**例外：v0.7.1 → v0.7.2 是改名版本**，profile 里仍记着旧包名 `dsh-auth-gate`，只 `git pull` + 重启会因新 bundle 名 `dsh-pairing-gate` 无法解析而加载失败；必须按「从旧名 `dsh-auth-gate` 迁移」先 `remove` 旧名再 `add link:`，然后重启。
+- **升级（link 安装）**：更新源码（`git pull` 或替换插件目录）→ `systemctl restart dsh`，无需重新 `dsh plugin add`。账号、TOTP、已配对设备、`state.json` 与 `network.json` 都会保留，无需迁移（**v0.7.4 例外，见下**）。**例外：v0.7.1 → v0.7.2 是改名版本**，profile 里仍记着旧包名 `dsh-auth-gate`，只 `git pull` + 重启会因新 bundle 名 `dsh-pairing-gate` 无法解析而加载失败；必须按「从旧名 `dsh-auth-gate` 迁移」先 `remove` 旧名再 `add link:`，然后重启。
+- **⚠️ v0.7.3 → v0.7.4 是破坏性默认值变更**：v0.7.4 起插件包自带的 `cordis.patch.yml` 改为可移植默认值（`listenHost: 127.0.0.1`、`listenPort: 3443`、`upstream: http://127.0.0.1:3080`、不配置 TLS/publicUrl）。已有部署如果依赖旧的 bundle 默认值，**必须先**在 profile `$DSH_HOME/profiles/web/cordis.patch.yml` 加 `- id: auth-gate` 的 override 并写全生产配置（`listenHost`/`upstream`/`upstreamInsecureTls`/`tlsCert`/`tlsKey`/`publicUrl` 等，模板见 installation §2.2.2），重启后才不会掉线。否则：`network.json` 里的 https `publicUrl` 会因「未配置 TLS」被判无效并回退到 bundle 默认值，网关落到 `127.0.0.1:3443` 纯 HTTP、上游 `127.0.0.1:3080` 不可达，外部 3443/公网入口失效。改完 override 后重启，确认 journal 出现 `listening on https://<你的对外地址>` 且 `curl -k https://<LAN>:3443/__auth/login` 为 200。
 - **升级前建议备份**：`tar -czf ~/auth-gate-$(date +%F).tgz -C "$DSH_HOME" auth-gate`（含账号与设备，权限 0600）。
 - **回滚方式**：把源码切到目标 Release 对应的 tag/commit（或解压旧版本备份）→ `systemctl restart dsh`。旧版本会忽略新版本写入的多余 state 字段；仍建议回滚前备份 `$DSH_HOME/auth-gate`。
 - **查看当前版本**：`node -e "console.log(require('./package.json').version)"`。
@@ -655,11 +706,11 @@ node lib/standalone.js
 
 ```bash
 cd $PLUGIN_DIR
-npm test                       # node:test：password/base32/totp/ratelimit/store/sliding/qr/fingerprint/config/network/proxy/dsh-session/pages/gateway-401/admin-session/setup/client-render/device-token-atomic
+npm test                       # node:test：password/base32/totp/ratelimit/store/sliding/qr/fingerprint/config/first-run-smoke/network/proxy/dsh-session/pages/gateway-401/admin-session/setup/client-render/device-token-atomic
 bash tests/e2e-standalone.sh   # 真实 TLS 网关全流程（1~2 分钟，含 WebUI 会话通道 + 初始化向导 + 网络设置/热重建 + 对外证书指纹 + 滑动续期/吊销级联）
 ```
 
-当前基线（v0.7.3）：`npm test` **167/167 pass**；`bash tests/e2e-standalone.sh` → **E2E PASSED（29 步 / 39 PASS）**（`tests/client-device-id.test.js` 9 项、`tests/device-token-atomic.test.js` 6 项；e2e 第 28 步验证同一 `clientDeviceId` 重配：设备记录数不变、旧 token renew 401、新 token renew 200、非法 ID 400、管理 API 不回显该 ID；第 29 步验证并发旧 token renew 与同 ID 重配交错后旧 session 为 0、旧 token 401、新 token 200）。P2 加固新增 4 项单测：store 层非法 `clientDeviceId` 拒绝且票据仍可用、替换清空其它待用票据、重复非空 `clientDeviceId` 的 state 拒绝启动、`maxDevices` 1/100 边界接受而 0/101 拒绝。第 21 步在 LAN 地址 + 独立 `stateDir` 的已初始化实例上验证 session+TOTP 改 publicUrl、QR 使用中转 origin、invalid 400、adminKey 恢复；第 22 步验证 LAN 地址上 3458→3459→3458 热重建（先绑新后关旧、旧端口关闭/新端口 200/network.json 持久化）；第 23 步验证通配地址（含 `::0`/`0::0`/`00::`/`::ffff:0.0.0.0`）、loopback（`127.0.0.1`/`::1`）、上游端口、http/https 不匹配均 400 且不持久化/不改监听，并验证「绑定成功但 network.json 持久化失败」时关闭新监听、旧端口继续 200；第 24 步验证损坏 `network.json` 启动回退到 bundle config；v0.7.1 新增/改动：第 3/11/19 步的 `no-store` 断言兼容 `private, no-store`；第 26 步新增注入时钟的 P2-1（cookie 响应头 + asset 不刷新）与 P2-3（旧设备越过绝对上限后 token/session 失效）场景；第 27 步对真实网关断言登录页/登录/renew 响应带 `private, no-store` + `Vary: cookie`，带会话 cookie 的 public asset 不返回 `Set-Cookie` 且不被要求登录。第 25 步验证 `publicFingerprint`：空值回退网关证书、固定值（大写归一）驱动 QR `fp=`、`"auto"` 对 setup 实例自身 TLS 握手读出证书指纹并落盘、探测失败（关闭端口）400 `fingerprint_fetch_failed` 且不落盘、session 写入仍须 TOTP、审计只留前 8 位。主网关仍监听 loopback，用于验证 P0 修复（无凭据读 state/admin-key 均 403，启动 WARN）。
+当前基线（v0.7.4）：`npm test` **171/171 pass**（新增 4 项：空配置解析为可移植默认、打包默认文件不含本机部署值、首装冒烟、无 `DSH_HOME` 时 `stateDir` 回退 `~/.dsh/auth-gate`）；`bash tests/e2e-standalone.sh` → **E2E PASSED（29 步 / 39 PASS）**（e2e 未改动）。v0.7.4 首装冒烟测试用临时 `stateDir` + 默认配置启动 standalone：登录页 200、`/__admin` 可访问、未认证 `GET /__admin/api/admin-key` 返回 403 且不回显密钥（loopback 管理通道禁用）、setup 链接与 0600 `setup.token`、SIGTERM 干净退出且无临时文件/进程；单测另回归「显式 TLS 配置仍要求 publicUrl https」。（`tests/client-device-id.test.js` 9 项、`tests/device-token-atomic.test.js` 6 项；e2e 第 28 步验证同一 `clientDeviceId` 重配：设备记录数不变、旧 token renew 401、新 token renew 200、非法 ID 400、管理 API 不回显该 ID；第 29 步验证并发旧 token renew 与同 ID 重配交错后旧 session 为 0、旧 token 401、新 token 200）。P2 加固新增 4 项单测：store 层非法 `clientDeviceId` 拒绝且票据仍可用、替换清空其它待用票据、重复非空 `clientDeviceId` 的 state 拒绝启动、`maxDevices` 1/100 边界接受而 0/101 拒绝。第 21 步在 LAN 地址 + 独立 `stateDir` 的已初始化实例上验证 session+TOTP 改 publicUrl、QR 使用中转 origin、invalid 400、adminKey 恢复；第 22 步验证 LAN 地址上 3458→3459→3458 热重建（先绑新后关旧、旧端口关闭/新端口 200/network.json 持久化）；第 23 步验证通配地址（含 `::0`/`0::0`/`00::`/`::ffff:0.0.0.0`）、loopback（`127.0.0.1`/`::1`）、上游端口、http/https 不匹配均 400 且不持久化/不改监听，并验证「绑定成功但 network.json 持久化失败」时关闭新监听、旧端口继续 200；第 24 步验证损坏 `network.json` 启动回退到 bundle config；v0.7.1 新增/改动：第 3/11/19 步的 `no-store` 断言兼容 `private, no-store`；第 26 步新增注入时钟的 P2-1（cookie 响应头 + asset 不刷新）与 P2-3（旧设备越过绝对上限后 token/session 失效）场景；第 27 步对真实网关断言登录页/登录/renew 响应带 `private, no-store` + `Vary: cookie`，带会话 cookie 的 public asset 不返回 `Set-Cookie` 且不被要求登录。第 25 步验证 `publicFingerprint`：空值回退网关证书、固定值（大写归一）驱动 QR `fp=`、`"auto"` 对 setup 实例自身 TLS 握手读出证书指纹并落盘、探测失败（关闭端口）400 `fingerprint_fetch_failed` 且不落盘、session 写入仍须 TOTP、审计只留前 8 位。主网关仍监听 loopback，用于验证 P0 修复（无凭据读 state/admin-key 均 403，启动 WARN）。
 
 E2E 行为：
 

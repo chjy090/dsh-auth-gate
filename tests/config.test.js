@@ -44,6 +44,93 @@ test('plain-HTTP defaults resolve and publicUrl is derived', async () => {
   assert.equal(gatewayConfig(resolved).listenPort, 3456);
 });
 
+test('empty config resolves the portable v0.7.4 defaults', async () => {
+  const dir = await tempDir();
+  // v0.7.4: a fresh install must start from the built-in defaults alone; no
+  // LAN address, TLS material or absolute deployment paths may be required.
+  const resolved = await resolveConfig({}, { env: { DSH_HOME: dir } });
+  assert.equal(resolved.listenHost, '127.0.0.1');
+  assert.equal(resolved.listenPort, 3443);
+  assert.equal(resolved.upstream, 'http://127.0.0.1:3080/');
+  assert.equal(resolved.upstreamBaseUrl, 'http://127.0.0.1:3080/');
+  assert.equal(resolved.upstreamInsecureTls, false);
+  assert.equal(resolved.tls, null);
+  assert.equal(resolved.tlsCert, null);
+  assert.equal(resolved.tlsKey, null);
+  assert.equal(resolved.publicUrl, 'http://127.0.0.1:3443');
+  assert.equal(resolved.publicFingerprint, '');
+  assert.equal(resolved.maxDevices, 100);
+  assert.equal(resolved.stateDir, path.join(dir, 'auth-gate'));
+  assert.equal(resolved.adminKeyFile, path.join(dir, 'auth-gate', 'admin.key'));
+  assert.deepEqual(gatewayConfig(resolved).loginLock, { maxFailures: 5, windowMinutes: 15, lockMinutes: 15 });
+  assert.equal(gatewayConfig(resolved).publicUrl, 'http://127.0.0.1:3443');
+});
+
+test('shipped defaults need no $DSH_HOME (state dir falls back to ~/.dsh)', async () => {
+  const dir = await tempDir();
+  const example = JSON.parse(await fs.readFile(path.join(process.cwd(), 'config.example.json'), 'utf8'));
+
+  // v0.7.4: a fresh install on a machine without DSH_HOME must not end up with
+  // an absolute /auth-gate path (mkdir would fail for non-root users).
+  const resolved = await resolveConfig(example, { env: { HOME: dir } });
+  assert.equal(resolved.stateDir, path.join(dir, '.dsh', 'auth-gate'));
+  assert.equal(resolved.adminKeyFile, path.join(dir, '.dsh', 'auth-gate', 'admin.key'));
+
+  // A user profile that still spells out $DSH_HOME gets the same fallback.
+  const spelled = await resolveConfig(
+    { stateDir: '$DSH_HOME/auth-gate', adminKeyFile: '$DSH_HOME/auth-gate/admin.key' },
+    { env: { HOME: dir } }
+  );
+  assert.equal(spelled.stateDir, path.join(dir, '.dsh', 'auth-gate'));
+  assert.equal(spelled.adminKeyFile, path.join(dir, '.dsh', 'auth-gate', 'admin.key'));
+
+  const patchConfig = (await fs.readFile(path.join(process.cwd(), 'cordis.patch.yml'), 'utf8'))
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('#'))
+    .join('\n');
+  assert.ok(!patchConfig.includes('stateDir:'), 'bundle patch must rely on the default state dir');
+  assert.ok(!patchConfig.includes('adminKeyFile:'), 'bundle patch must rely on the default admin key');
+  assert.ok(!patchConfig.includes('$DSH_HOME'), 'bundle patch must not spell out $DSH_HOME');
+});
+
+test('shipped cordis.patch.yml and config.example.json stay portable', async () => {
+  const patch = await fs.readFile(path.join(process.cwd(), 'cordis.patch.yml'), 'utf8');
+  const patchConfig = patch
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('#'))
+    .join('\n');
+  assert.match(patchConfig, /listenHost: 127\.0\.0\.1/u);
+  assert.match(patchConfig, /listenPort: 3443/u);
+  assert.match(patchConfig, /upstream: http:\/\/127\.0\.0\.1:3080/u);
+  // A packaged default must never point at one machine's deployment details.
+  for (const forbidden of [
+    '172.16.180.14',
+    '192.0.2.10',
+    '/opt/deepseekharness',
+    'tlsCert:',
+    'tlsKey:',
+    'publicUrl:',
+    'upstreamInsecureTls:',
+    'publicFingerprint:'
+  ]) {
+    assert.ok(!patchConfig.includes(forbidden), `cordis.patch.yml must not contain ${forbidden}`);
+  }
+
+  const example = JSON.parse(await fs.readFile(path.join(process.cwd(), 'config.example.json'), 'utf8'));
+  const dir = await tempDir();
+  const resolved = await resolveConfig(example, { env: { DSH_HOME: dir } });
+  assert.equal(resolved.listenHost, '127.0.0.1');
+  assert.equal(resolved.listenPort, 3443);
+  assert.equal(resolved.upstream, 'http://127.0.0.1:3080/');
+  assert.equal(resolved.tls, null);
+  assert.equal(resolved.publicUrl, 'http://127.0.0.1:3443');
+  assert.equal(resolved.upstreamInsecureTls, false);
+  assert.equal(resolved.maxDevices, 100);
+  for (const forbidden of ['tlsCert', 'tlsKey', 'publicUrl', 'publicFingerprint']) {
+    assert.ok(!(forbidden in example), `config.example.json must not contain ${forbidden}`);
+  }
+});
+
 test('absolute TTL ceilings accept 0 (= no ceiling) and enforce 0-3650', async () => {
   const dir = await tempDir();
   const base = { listenHost: '127.0.0.1', listenPort: 3456, upstream: 'http://127.0.0.1:3999', stateDir: dir };

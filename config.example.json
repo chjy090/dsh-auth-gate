@@ -1,0 +1,17 @@
+{
+  "listenHost": "127.0.0.1",
+  "listenPort": 3443,
+  "upstream": "http://127.0.0.1:3080",
+  "upstreamInsecureTls": false,
+  "sessionTtlHours": 48,
+  "sessionAbsoluteTtlDays": 30,
+  "deviceTtlDays": 90,
+  "deviceAbsoluteTtlDays": 365,
+  "maxDevices": 100,
+  "pairTicketTtlSeconds": 120,
+  "loginLock": {
+    "maxFailures": 5,
+    "windowMinutes": 15,
+    "lockMinutes": 15
+  }
+}

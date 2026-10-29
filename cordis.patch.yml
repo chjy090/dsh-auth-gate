@@ -1,34 +1,53 @@
-# dsh-pairing-gate — 前台 HTTPS 认证网关（扫码设备验证 + 用户名密码 + TOTP）。
+# dsh-pairing-gate — 前台认证网关（扫码设备配对 + 用户名密码 + TOTP）。
 #
-# 本文件由插件包通过 dsh.profile.bundles / dsh.bundle.patch 提供给 profile。
-# 安装（本轮不执行，需用户自行安排）：
+# 本文件是插件的**可移植默认配置**，由 dsh.bundle.patch 作为 bundle 层提供给 profile。
+# 安装：
 #   dsh plugin --profile web add link:$PLUGIN_DIR
-# 或在 profile 的 cordis.patch.yml（$DSH_HOME/profiles/web/cordis.patch.yml）里
-# 直接追加下面这段 insert；随后重启 dsh。
+# 或在没有使用 dsh plugin add 时，手工把下面这段 insert 追加到 profile 的
+# cordis.patch.yml（$DSH_HOME/profiles/web/cordis.patch.yml）并重启 dsh。
 #
-# v0.6.0：管理页「网络设置」写入的 $DSH_HOME/auth-gate/network.json 会在启动时覆盖
-# 下面的 listenHost/listenPort/publicUrl（其它字段仍以本文件为准）；删除该文件并重启
-# 即可回退到这里的默认值。
+# v0.7.4 起默认值可在任何新机器直接启动，不含本机部署信息：
+#   - 只监听本机 loopback 的明文 HTTP：http://127.0.0.1:3443；
+#   - 反代本机 dsh：http://127.0.0.1:3080（无 TLS 校验问题，upstreamInsecureTls 默认 false）；
+#   - 不配置 TLS（tlsCert/tlsKey 留空），publicUrl 自动推导为 http://127.0.0.1:3443。
+# 因此首次安装后可在本机浏览器打开日志里的 setup 链接完成初始化和管理。
+#
+# 生产 / 跨机 / App 配对：App 扫码只接受 https 配对 URL，必须补上 TLS。两种拓扑下
+# 网关自身都必须配置 tlsCert/tlsKey（自签即可）——配置校验：配了 TLS ⇒ publicUrl
+# 必须 https；没配 TLS ⇒ publicUrl 必须 http（terminate TLS in the gate, not in
+# front of it）。二选一：
+#   1. 网关自己终止 TLS：listenHost 改为本机 LAN 地址，配置 tlsCert/tlsKey，
+#      并把 publicUrl 写成 https://<实际访问的主机>[:端口]；
+#   2. 前面用 Caddy/Nginx 等反向代理终止**对外** TLS：网关仍监听 LAN 地址并配置
+#      tlsCert/tlsKey（自签即可），代理以 HTTPS 回源（跳过校验或信任网关 CA）；
+#      publicUrl 写代理对外的 https 地址；代理证书与网关证书不同时，再把代理证书
+#      的 SHA-256 DER 指纹填到 publicFingerprint（否则 App 会 fail-closed 拒绝）。
+#   不支持「代理终止 TLS + 明文 HTTP 回源 + 网关不配证书」：此时 publicUrl 只能是
+#   http，App 无法用 HTTPS + 指纹配对。
+# 生产配置的正确位置是 profile override（$DSH_HOME/profiles/web/cordis.patch.yml
+# 里按 id: auth-gate 覆盖），不要直接改插件包内的本文件——升级会覆盖。
+# 注意 Cordis 的 patch 对 config 是整体替换：profile override 必须写全所有字段。
+#
+# 管理页（v0.6.0）写入的 $DSH_HOME/auth-gate/network.json（未设置 DSH_HOME 时
+# 为 ~/.dsh/auth-gate/network.json）会在启动时覆盖下面的
+# listenHost/listenPort/publicUrl/publicFingerprint（其它字段仍以本文件为准）；
+# 删除该文件并重启即可回退到这里的默认值。
 #
 # 安全提示：
-#   - listenHost 必须是具体网卡地址，不支持 0.0.0.0/::；只暴露给需要访问的网段。
-#   - upstream 当前为 dsh 原生 HTTPS（自签证书），因此 upstreamInsecureTls 为 true；
-#     若 dsh 改回明文 HTTP，请同步修改 upstream / publicUrl / tls*。
+#   - 默认监听 loopback 时，网关会自动禁用「本机 loopback 即管理员」通道，
+#     管理页只接受 adminKey header 或已配对会话；这适合首装，不适合生产入口。
+#   - listenHost 必须是具体网卡地址，不支持 0.0.0.0/::；生产只暴露给需要访问的网段。
+#   - upstream 必须与 dsh 实际监听的 authority 一致；若 dsh 是自签 HTTPS，
+#     把 upstream 改为 https://... 并设 upstreamInsecureTls: true。
 #   - 首次启动会在 $DSH_HOME/auth-gate/admin.key 生成 32 字节 hex 管理密钥（0600），
-#     并在日志打印一次；请立即保存到密码管理器。
+#     并在日志打印掩码；请立即保存到密码管理器。
 - insert:
     - id: auth-gate
       name: 'dsh-pairing-gate'
       config:
-        listenHost: 172.16.180.14
+        listenHost: 127.0.0.1
         listenPort: 3443
-        upstream: https://172.16.180.14:3080
-        upstreamInsecureTls: true
-        publicUrl: https://172.16.180.14:3443
-        tlsCert: /opt/deepseekharness/config/tls/dsh.crt.pem
-        tlsKey: /opt/deepseekharness/config/tls/dsh.key.pem
-        adminKeyFile: $DSH_HOME/auth-gate/admin.key
-        stateDir: $DSH_HOME/auth-gate
+        upstream: http://127.0.0.1:3080
         sessionTtlHours: 48
         sessionAbsoluteTtlDays: 30
         deviceTtlDays: 90

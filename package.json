@@ -1,9 +1,9 @@
 {
   "name": "dsh-pairing-gate",
-  "version": "0.7.3",
+  "version": "0.7.4",
   "type": "module",
   "main": "lib/index.js",
-  "description": "Front-door HTTPS device-pairing gateway for DeepSeek Harness: TOTP-authorised QR device pairing, username/password login, sliding sessions and a reverse proxy with WebSocket tunnelling to a local dsh.",
+  "description": "Device-pairing gateway for DeepSeek Harness: TOTP-authorised QR device pairing, username/password login, sliding sessions, reverse proxy with WebSocket tunnelling, optional TLS and public exposure.",
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -25,7 +25,9 @@
     "lib",
     "locales",
     "cordis.patch.yml",
-    "README.md"
+    "config.example.json",
+    "README.md",
+    "docs/installation.md"
   ],
   "scripts": {
     "test": "node --test tests/*.test.js",
